@@ -1,0 +1,15 @@
+# сторонние библиотеки ставятся пользователем (см. THIRD_PARTY_NOTICES.md)
+vendor/*
+!vendor/README.md
+# тестовые данные и результаты
+tests/datasets/
+tests/out/
+*.png
+# служебное
+__pycache__/
+*.pyc
+.DS_Store
+backup/
+*.hip
+*.hiplc
+*.hipnc

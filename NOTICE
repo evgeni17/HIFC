@@ -1,0 +1,22 @@
+HIFC — IFC import/export for SideFX Houdini
+Copyright 2026 EOK (https://github.com/evgeni17) and HIFC contributors
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+This product does NOT include third-party code in its source tree. At runtime it
+uses the following third-party software, which is installed separately by the
+user (see THIRD_PARTY_NOTICES.md for details and licence texts):
+
+  - IfcOpenShell (ifcopenshell-python) — LGPL-3.0-or-later
+    https://github.com/IfcOpenShell/IfcOpenShell
+  - Shapely — BSD-3-Clause; lark — MIT; isodate — BSD-3-Clause;
+    python-dateutil — Apache-2.0 / BSD-3-Clause; six — MIT;
+    typing_extensions — PSF-2.0; NumPy (bundled with Houdini) — BSD-3-Clause
+
+HIFC is an independent project. It is not affiliated with, endorsed or
+sponsored by SideFX (Side Effects Software Inc.), buildingSMART International
+Ltd., the IfcOpenShell project or the Bonsai project.
+"Houdini" and "SideFX" are trademarks of Side Effects Software Inc.
+"IFC" and "buildingSMART" are trademarks of buildingSMART International Ltd.
+All other trademarks are the property of their respective owners and are used
+here for identification purposes only.

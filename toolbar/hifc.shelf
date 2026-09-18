@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<shelfDocument>
+  <toolshelf name="hifc" label="HIFC">
+    <memberTool name="hifc_import_ifc"/>
+    <memberTool name="hifc_export_ifc"/>
+    <memberTool name="hifc_attr_template"/>
+    <memberTool name="hifc_attr_guide"/>
+    <memberTool name="hifc_about"/>
+  </toolshelf>
+
+  <tool name="hifc_import_ifc" label="Import IFC" icon="SOP_file">
+    <helpText><![CDATA[Pick an .ifc file and create a HIFC IFC Import node.]]></helpText>
+    <script scriptType="python"><![CDATA[import hifc.tools as t
+t.import_ifc(kwargs)]]></script>
+  </tool>
+
+  <tool name="hifc_export_ifc" label="Export IFC" icon="SOP_rop_geometry">
+    <helpText><![CDATA[Append a HIFC IFC Export node to the selected SOP.]]></helpText>
+    <script scriptType="python"><![CDATA[import hifc.tools as t
+t.export_selected(kwargs)]]></script>
+  </tool>
+
+  <tool name="hifc_attr_template" label="IFC Attributes" icon="SOP_attribwrangle">
+    <helpText><![CDATA[Append a Primitive Wrangle with a template of all IFC attributes to the selected SOP.]]></helpText>
+    <script scriptType="python"><![CDATA[import hifc.tools as t
+t.attribute_template(kwargs)]]></script>
+  </tool>
+
+  <tool name="hifc_attr_guide" label="IFC Guide" icon="BUTTONS_help">
+    <helpText><![CDATA[Open the attribute guide (help of HIFC IFC Export).]]></helpText>
+    <script scriptType="python"><![CDATA[import hifc.tools as t
+t.attribute_guide(kwargs)]]></script>
+  </tool>
+
+  <tool name="hifc_about" label="HIFC Info" icon="MISC_python">
+    <script scriptType="python"><![CDATA[import hifc.tools as t
+t.about(kwargs)]]></script>
+  </tool>
+</shelfDocument>

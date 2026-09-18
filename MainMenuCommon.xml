@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mainMenu>
+  <menuBar>
+    <subMenu id="hifc_menu">
+      <label>HIFC</label>
+      <insertBefore>help_menu</insertBefore>
+      <scriptItem id="hifc_import">
+        <label>Import IFC...</label>
+        <scriptCode><![CDATA[import hifc.tools as t; t.import_ifc(kwargs)]]></scriptCode>
+      </scriptItem>
+      <scriptItem id="hifc_export">
+        <label>Export Selected SOP to IFC</label>
+        <scriptCode><![CDATA[import hifc.tools as t; t.export_selected(kwargs)]]></scriptCode>
+      </scriptItem>
+      <separatorItem/>
+      <scriptItem id="hifc_template">
+        <label>Create Attribute Template</label>
+        <scriptCode><![CDATA[import hifc.tools as t; t.attribute_template(kwargs)]]></scriptCode>
+      </scriptItem>
+      <scriptItem id="hifc_guide">
+        <label>Attribute Guide (Help)</label>
+        <scriptCode><![CDATA[import hifc.tools as t; t.attribute_guide(kwargs)]]></scriptCode>
+      </scriptItem>
+      <separatorItem/>
+      <scriptItem id="hifc_rebuild">
+        <label>Rebuild HDAs</label>
+        <scriptCode><![CDATA[import hifc.tools as t; t.rebuild_hdas(kwargs)]]></scriptCode>
+      </scriptItem>
+      <scriptItem id="hifc_deps">
+        <label>Install / Update ifcopenshell</label>
+        <scriptCode><![CDATA[import hifc.tools as t; t.install_deps(kwargs)]]></scriptCode>
+      </scriptItem>
+      <scriptItem id="hifc_about">
+        <label>About HIFC</label>
+        <scriptCode><![CDATA[import hifc.tools as t; t.about(kwargs)]]></scriptCode>
+      </scriptItem>
+    </subMenu>
+  </menuBar>
+</mainMenu>

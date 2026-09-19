@@ -44,7 +44,7 @@ s@ifc_material = (category == "Tube") ? "Polycarbonate" : "Aluminium";
 // f@Alpha = 1.0;           // прозрачность
 
 // --- 6. СВОЙСТВА (Property Sets) ---
-// длины/площади — в ЕДИНИЦАХ ПРОЕКТА IFC (по умолчанию мм), а не в единицах Houdini
+// числа без пометки в ifc_measures пишутся как есть — в ЕДИНИЦАХ ПРОЕКТА IFC (по умолчанию мм)
 float len_mm = prim(0, "length", @primnum) * 1000.0;
 dict data;
 data["Length_mm"] = len_mm;
@@ -56,9 +56,16 @@ common["IsExternal"]  = 0;
 common["LoadBearing"] = 0;
 psets["Pset_MemberCommon"] = common;                 // стандартный набор buildingSMART
 dict qto;
-qto["Length"] = len_mm;
+qto["Length"] = prim(0, "length", @primnum);         // в МЕТРАХ: см. ifc_measures ниже
 psets["Qto_MemberBaseQuantities"] = qto;             // Qto_* -> IfcElementQuantity (только числа)
 d@ifc_psets = psets;
+
+// какие значения заданы в СИ (м, м², м³) — экспорт сам пересчитает их в единицы файла
+dict qto_kind;
+qto_kind["Length"] = "LENGTH";
+dict measures;
+measures["Qto_MemberBaseQuantities"] = qto_kind;
+d@ifc_measures = measures;
 
 // --- 7. GUID (необязательно) ---
 // если не задан — генерируется стабильно из path + storey + GUID Seed

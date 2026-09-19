@@ -145,6 +145,10 @@ def collect_elements(node, geo, log=None):
     add_path_prop = bool(_ev(node, "pathprop", 1))
     dict_attr = _ev(node, "dictattrib", "ifc_psets")
     dict_vals = _prim_values(geo, dict_attr) if dict_attr and geo.findPrimAttrib(dict_attr) else None
+    meas_attr = _ev(node, "measuresattrib", "ifc_measures")
+    meas_vals = _prim_values(geo, meas_attr) if meas_attr and geo.findPrimAttrib(meas_attr) else None
+    mats_attr = _ev(node, "materialsattrib", "ifc_materials")
+    mats_prims = geo.prims() if mats_attr and geo.findPrimAttrib(mats_attr) else None
 
     P = np.frombuffer(geo.pointFloatAttribValuesAsString("P"), dtype=np.float32).reshape(-1, 3).astype(np.float64)
     # Houdini -> IFC: Y вверх -> Z вверх, единицы сцены -> метры
@@ -228,6 +232,8 @@ def collect_elements(node, geo, log=None):
             "guid": guid_v[i0] if guid_v else None,
             "storey": storey_v[i0] if storey_v and storey_v[i0] else None,
             "material": mat_v[i0] if mat_v and mat_v[i0] else None,
+            "materials": [m for m in (mats_prims[i0].attribValue(mats_attr) if mats_prims else ()) if m] or None,
+            "measures": meas_vals[i0] if meas_vals is not None and isinstance(meas_vals[i0], dict) else None,
             "tag": tag_v[i0] if tag_v and tag_v[i0] else None,
             "description": desc_v[i0] if desc_v and desc_v[i0] else None,
             "objecttype": otype_v[i0] if otype_v and otype_v[i0] else None,
@@ -378,12 +384,11 @@ def check_attributes(node, geo=None):
                 no_class += 1
                 cls = _ev(node, "defaultclass", "IfcBuildingElementProxy")
         class_count[cls] = class_count.get(cls, 0) + 1
-        try:
-            decl = schema.declaration_by_name(cls) if cls else None
-        except RuntimeError:
-            decl = None  # класса нет в схеме
-        if decl is None:
-            bad_class.add(cls)
+        from .ifc_write import class_status, STATUS_TEXT
+        status = class_status(schema_id, cls) if cls else "unknown"
+        decl = schema.declaration_by_name(cls) if status != "unknown" else None
+        if status != "ok":
+            bad_class.add("%s (%s)" % (cls, STATUS_TEXT[status]))
         elif pt:
             # PredefinedType должен быть из перечисления класса
             ok = False
@@ -435,7 +440,7 @@ def check_attributes(node, geo=None):
             info.append("Custom property sets: %s" % ", ".join(sorted(own_pset)[:10]))
 
     if bad_class:
-        errors.append("Unknown classes for %s: %s -> will become %s" % (schema_id, ", ".join(sorted(bad_class)), _ev(node, "defaultclass", "IfcBuildingElementProxy")))
+        errors.append("Classes that cannot be exported as elements in %s: %s -> will become %s" % (schema_id, ", ".join(sorted(bad_class)), _ev(node, "defaultclass", "IfcBuildingElementProxy")))
     if bad_pt:
         warns.append("PredefinedType not in enum (-> USERDEFINED): %s" % ", ".join(sorted(bad_pt)[:10]))
     if no_class:

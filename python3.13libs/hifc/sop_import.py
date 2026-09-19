@@ -123,9 +123,9 @@ def _prim_int_attr(geo, name, values):
     geo.setPrimIntAttribValuesFromString(name, np.asarray(values, dtype=np.int32).tobytes())
 
 
-def _prim_float_attr(geo, name, values, size=1):
+def _prim_float_attr(geo, name, values, size=1, default=0.0):
     if geo.findPrimAttrib(name) is None:
-        geo.addAttrib(hou.attribType.Prim, name, (0.0,) * size if size > 1 else 0.0)
+        geo.addAttrib(hou.attribType.Prim, name, (default,) * size if size > 1 else default)
     geo.setPrimFloatAttribValuesFromString(name, np.asarray(values, dtype=np.float32).tobytes())
 
 
@@ -151,8 +151,16 @@ def _flat_name(pset, prop):
 REC_STR_ATTRS = (
     ("path", "path"), ("ifc_guid", "guid"), ("ifc_class", "ifc_class"), ("ifc_predefined", "predefined"),
     ("ifc_name", "name"), ("ifc_storey", "storey"), ("ifc_type", "type_name"),
-    ("ifc_object_type", "object_type"), ("ifc_tag", "tag"),
+    ("ifc_object_type", "object_type"), ("ifc_tag", "tag"), ("ifc_description", "description"),
 )
+
+
+def _prim_string_array_attr(geo, name, values):
+    """Строковый массив на примитив (s[]@...)."""
+    if geo.findPrimAttrib(name) is None:
+        geo.addArrayAttrib(hou.attribType.Prim, name, hou.attribData.String)
+    for prim, v in zip(geo.iterPrims(), values):
+        prim.setAttribValue(name, tuple(v))
 
 
 def cook(node):
@@ -195,9 +203,14 @@ def cook(node):
     for attr, key in REC_STR_ATTRS:
         _prim_string_attr(geo, attr, rep([r[key] for r in recs]))
     _prim_int_attr(geo, "ifc_id", rep([r["id"] for r in recs]))
-    _prim_string_attr(geo, "ifc_material", rep([", ".join(r["materials"]) for r in recs]))
+    # один материал -> s@ifc_material; полный список (наборы материалов) -> s[]@ifc_materials
+    _prim_string_attr(geo, "ifc_material", rep([r["materials"][0] if len(r["materials"]) == 1 else "" for r in recs]))
+    if any(len(r["materials"]) > 1 for r in recs):
+        _prim_string_array_attr(geo, "ifc_materials", rep([r["materials"] for r in recs]))
     if want_psets:
         _prim_dict_attr(geo, "ifc_psets", rep([r["psets"] for r in recs]))
+        # какие свойства — длины/площади/объёмы в СИ (нужно экспорту для пересчёта единиц)
+        _prim_dict_attr(geo, "ifc_measures", rep([r.get("measures") or {} for r in recs]))
         if flatten:
             _flatten_psets(geo, recs, rep)
 
@@ -239,8 +252,7 @@ def _cook_polys(geo, recs, y_up, scale, want_color):
     if want_color:
         c = np.concatenate(cols)
         _prim_float_attr(geo, "Cd", c[:, :3], 3)
-        if np.any(c[:, 3] < 0.999):
-            _prim_float_attr(geo, "Alpha", c[:, 3])
+        _prim_float_attr(geo, "Alpha", c[:, 3], default=1.0)
         _prim_string_attr(geo, "ifc_style", snames)
 
 
@@ -255,8 +267,8 @@ def _cook_packed(geo, recs, y_up, scale, want_color):
         if want_color and len(r["faces"]):
             c = _face_colors(r)
             _prim_float_attr(sub, "Cd", c[:, :3], 3)
-            if np.any(c[:, 3] < 0.999):
-                _prim_float_attr(sub, "Alpha", c[:, 3])
+            # Alpha пишем всегда (по умолчанию 1): иначе при Unpack/Merge непрозрачные элементы получают 0
+            _prim_float_attr(sub, "Alpha", c[:, 3], default=1.0)
             _prim_string_attr(sub, "ifc_style", _face_style_names(r))
             first_colors.append(c[0, :3])
         else:

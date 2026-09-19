@@ -125,10 +125,14 @@ IfcProject            <- параметр Project
 
 `s@ifc_material`:
     Имя материала (IfcMaterial). Одинаковые имена — один материал на весь проект. Пишите реальный материал: `Aluminium`, `Steel S235`, `Polycarbonate`.
+`s[]@ifc_materials`:
+    Несколько материалов одного элемента (например, окно: `Glass`, `Wood`) -> IfcMaterialConstituentSet (в IFC2X3 — IfcMaterialList). Имеет приоритет над `s@ifc_material`. Слои и толщины не переносятся.
 `Cd` (prim или point), `f@Alpha`:
     Цвет и прозрачность -> IfcSurfaceStyle. Одинаковый цвет = один стиль.
 `s@ifc_style`:
     Имя стиля (иначе генерируется `Color_RRGGBB`).
+__Packed Colors__:
+    Для packed-примитивов: *Per Face* — берутся цвета граней внутри (результат импорта сохраняется как есть); *Override* — `Cd`/`Alpha` самого packed-примитива перекрашивают весь элемент.
 
 == Свойства (Property Sets) ==
 
@@ -148,7 +152,8 @@ d@ifc_psets = ps;
 
 * Наборы с именем `Pset_...` — стандартные, их свойства проверяются по шаблонам buildingSMART (типы значений приводятся автоматически: 0/1 -> Boolean). *Свои наборы не называйте на `Pset_`* — используйте префикс проекта (`ACME_Data`, `ACME_Common`).
 * Наборы `Qto_...` с числовыми значениями пишутся как IfcElementQuantity (количества для смет).
-* *Единицы:* длины, площади и объёмы в свойствах — в единицах проекта IFC (параметр Length Unit, по умолчанию *мм*), а не в метрах Houdini. Умножайте на 1000.
+* *Единицы:* числа в `d@ifc_psets` пишутся как есть, в единицах проекта IFC (параметр Length Unit, по умолчанию *мм*). Умножайте метры Houdini на 1000.
+* *Величины с единицами — `d@ifc_measures`* вида `{ИмяНабора: {Свойство: "LENGTH" | "AREA" | "VOLUME"}}`. Отмеченные так значения считаются заданными в СИ (м, м², м³) и пересчитываются в единицы файла автоматически, с правильным типом IFC (IfcLengthMeasure и т.д.). HIFC IFC Import заполняет этот атрибут сам, поэтому импорт -> экспорт не искажает количества при смене единиц.
 * Быстрый способ без словаря: перечислите атрибуты в __Attributes to Pset__ (маски, например `len_* N_*`) — они попадут в набор __Pset Name__ (HoudiniAttributes).
 * __Add Houdini_Path Property__ добавляет исходный path в этот же набор — удобно для обратной связи.
 
@@ -233,8 +238,8 @@ Include / Exclude Classes:
 
 @attributes
 
-`path`, `ifc_guid`, `ifc_class`, `ifc_predefined`, `ifc_name`, `ifc_tag`, `ifc_object_type`, `ifc_storey`, `ifc_type`,
-`ifc_material`, `ifc_style`, `ifc_id`, `d@ifc_psets`, `Cd`, `Alpha`.
+`path`, `ifc_guid`, `ifc_class`, `ifc_predefined`, `ifc_name`, `ifc_tag`, `ifc_object_type`, `ifc_description`,
+`ifc_storey`, `ifc_type`, `ifc_material`, `s[]@ifc_materials`, `ifc_style`, `ifc_id`, `d@ifc_psets`, `d@ifc_measures`, `Cd`, `Alpha`.
 """
 
 
@@ -360,10 +365,14 @@ Empty means __Default Storey__. Assemblies are built per storey: the same path p
 
 `s@ifc_material`:
     Material name (IfcMaterial). Equal names share one material in the project. Use real materials: `Aluminium`, `Steel S235`, `Polycarbonate`.
+`s[]@ifc_materials`:
+    Several materials of one element (e.g. a window: `Glass`, `Wood`) -> IfcMaterialConstituentSet (IfcMaterialList in IFC2X3). Takes priority over `s@ifc_material`. Layers and thicknesses are not transferred.
 `Cd` (prim or point), `f@Alpha`:
     Colour and transparency -> IfcSurfaceStyle. Equal colours share one style.
 `s@ifc_style`:
     Style name (otherwise `Color_RRGGBB` is generated).
+__Packed Colors__:
+    For packed primitives: *Per Face* uses the face colours stored inside (import results are kept as is); *Override* uses `Cd`/`Alpha` of the packed primitive for the whole element.
 
 == Properties (property sets) ==
 
@@ -383,7 +392,8 @@ d@ifc_psets = ps;
 
 * `Pset_...` sets are standard: their properties are typed from the buildingSMART templates (0/1 becomes Boolean automatically). *Do not name your own sets `Pset_...`*: use a project prefix (`ACME_Data`, `ACME_Common`).
 * `Qto_...` sets with numeric values are written as IfcElementQuantity (quantities for cost estimates).
-* *Units:* lengths, areas and volumes in properties are in IFC project units (Length Unit parameter, *millimetres* by default), not Houdini metres. Multiply by 1000.
+* *Units:* numbers in `d@ifc_psets` are written as is, in IFC project units (Length Unit parameter, *millimetres* by default). Multiply Houdini metres by 1000.
+* *Values with units: `d@ifc_measures`*, `{SetName: {Property: "LENGTH" | "AREA" | "VOLUME"}}`. Values marked this way are in SI (m, m², m³) and are converted to the file units automatically, with the proper IFC type (IfcLengthMeasure etc.). HIFC IFC Import fills this attribute, so import -> export keeps quantities correct when units change.
 * Quick way without a dictionary: list attributes in __Attributes to Pset__ (globs such as `len_* N_*`); they go to the __Pset Name__ set (HoudiniAttributes).
 * __Add Houdini_Path Property__ adds the source path to that set, handy for tracing back.
 
@@ -468,8 +478,8 @@ Include / Exclude Classes:
 
 @attributes
 
-`path`, `ifc_guid`, `ifc_class`, `ifc_predefined`, `ifc_name`, `ifc_tag`, `ifc_object_type`, `ifc_storey`, `ifc_type`,
-`ifc_material`, `ifc_style`, `ifc_id`, `d@ifc_psets`, `Cd`, `Alpha`.
+`path`, `ifc_guid`, `ifc_class`, `ifc_predefined`, `ifc_name`, `ifc_tag`, `ifc_object_type`, `ifc_description`,
+`ifc_storey`, `ifc_type`, `ifc_material`, `s[]@ifc_materials`, `ifc_style`, `ifc_id`, `d@ifc_psets`, `d@ifc_measures`, `Cd`, `Alpha`.
 """
 
 

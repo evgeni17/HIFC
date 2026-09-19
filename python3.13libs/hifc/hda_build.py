@@ -106,7 +106,9 @@ def _export_ptg():
                               ("tagattrib", "Tag Attribute", "ifc_tag"),
                               ("objtypeattrib", "Object Type Attribute", "ifc_object_type"),
                               ("descattrib", "Description Attribute", "ifc_description"),
-                              ("dictattrib", "Psets Dict Attribute", "ifc_psets")):
+                              ("materialsattrib", "Materials Array Attribute", "ifc_materials"),
+                              ("dictattrib", "Psets Dict Attribute", "ifc_psets"),
+                              ("measuresattrib", "Measures Dict Attribute", "ifc_measures")):
         f.addParmTemplate(hou.StringParmTemplate(name, label, 1, default_value=(dflt,)))
     f.addParmTemplate(hou.SeparatorParmTemplate("sep1"))
     f.addParmTemplate(hou.StringParmTemplate("psetname", "Pset Name", 1, default_value=("HoudiniAttributes",)))
@@ -114,6 +116,11 @@ def _export_ptg():
                                              help="Prim attribute globs, e.g. len_* N_*"))
     f.addParmTemplate(hou.ToggleParmTemplate("pathprop", "Add Houdini_Path Property", default_value=True))
     f.addParmTemplate(hou.ToggleParmTemplate("color", "Colors from Cd", default_value=True))
+    f.addParmTemplate(_menu("packedcolor", "Packed Colors", [
+        ("faces", "Per Face (inside packed)"), ("override", "Packed Primitive Cd Overrides")],
+        help="Per Face keeps the colours stored inside packed primitives (import result). "
+             "Override uses Cd/Alpha set on the packed primitive for the whole element.",
+        conditionals={hou.parmCondType.DisableWhen: "{ color == 0 }"}))
     g.append(f)
 
     f = hou.FolderParmTemplate("out_f", "Report", folder_type=hou.folderType.Tabs)
@@ -188,7 +195,8 @@ def build_export(otls=None):
     unpack.setInput(0, sub.indirectInputs()[0])
     tp = unpack.parm("transfer_attributes")
     if tp is not None:
-        tp.set("*")
+        # цвет/прозрачность с packed-примитива не должны затирать цвета граней внутри (режим Per Face)
+        tp.setExpression('ifs(ch("../packedcolor"), "*", "* ^Cd ^Alpha ^ifc_style")', hou.exprLanguage.Hscript)
     out = sub.createNode("output", "OUT")
     out.setInput(0, sub.indirectInputs()[0])
     path = os.path.join(otls or OTLS, "hifc_ifc_export.hda")

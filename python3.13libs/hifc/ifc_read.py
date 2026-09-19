@@ -8,7 +8,8 @@
         "type_name":  имя IfcTypeObject (если есть),
         "path":       "/Assembly/Element" или "/Project/Site/.../Element",
         "storey":     имя ближайшего пространственного контейнера,
-        "psets":      {"Pset": {"prop": value}},
+        "psets":      {"Pset": {"prop": value}},   # длины/площади/объёмы — в СИ (м, м², м³)
+        "measures":   {"Pset": {"prop": "LENGTH"|"AREA"|"VOLUME"}},  # какие значения пересчитаны в СИ
         "materials":  [имена IfcMaterial],
         "verts":      ndarray(N,3) — метры, мировые координаты IFC (Z вверх),
         "faces":      ndarray(M,3) — треугольники (CCW),
@@ -81,6 +82,81 @@ class _Chain:
         return c
 
 
+MEASURE_KIND = {
+    "IfcLengthMeasure": "LENGTH", "IfcPositiveLengthMeasure": "LENGTH", "IfcNonNegativeLengthMeasure": "LENGTH",
+    "IfcAreaMeasure": "AREA", "IfcVolumeMeasure": "VOLUME",
+}
+QUANTITY_KIND = {"IfcQuantityLength": "LENGTH", "IfcQuantityArea": "AREA", "IfcQuantityVolume": "VOLUME"}
+UNIT_TYPE = {"LENGTH": "LENGTHUNIT", "AREA": "AREAUNIT", "VOLUME": "VOLUMEUNIT"}
+_PREFIX = {"EXA": 1e18, "PETA": 1e15, "TERA": 1e12, "GIGA": 1e9, "MEGA": 1e6, "KILO": 1e3, "HECTO": 1e2,
+           "DECA": 1e1, "DECI": 1e-1, "CENTI": 1e-2, "MILLI": 1e-3, "MICRO": 1e-6, "NANO": 1e-9,
+           "PICO": 1e-12, "FEMTO": 1e-15, "ATTO": 1e-18}
+
+
+def unit_si_scale(u):
+    """Множитель перевода единицы IfcNamedUnit в СИ (м, м², м³)."""
+    try:
+        if u.is_a("IfcSIUnit"):
+            m = _PREFIX.get(u.Prefix, 1.0) if u.Prefix else 1.0
+            dim = 2 if u.Name == "SQUARE_METRE" else 3 if u.Name == "CUBIC_METRE" else 1
+            return m ** dim
+        if u.is_a("IfcConversionBasedUnit"):
+            cf = u.ConversionFactor
+            return float(cf.ValueComponent.wrappedValue) * unit_si_scale(cf.UnitComponent)
+    except Exception:
+        pass
+    return 1.0
+
+
+def _project_scales(f):
+    out = {}
+    for kind, ut in UNIT_TYPE.items():
+        try:
+            out[kind] = ifcopenshell.util.unit.calculate_unit_scale(f, ut)
+        except Exception:
+            out[kind] = 1.0
+    return out
+
+
+def _element_psets(f, e, scales):
+    """Наборы свойств + пересчёт измеряемых величин в СИ. Возвращает (psets, measures)."""
+    psets, measures = {}, {}
+    raw = ue.get_psets(e, verbose=True)
+    for pname, props in raw.items():
+        clean, kinds = {}, {}
+        for k, pv in props.items():
+            if k == "id" or not isinstance(pv, dict):
+                continue
+            v = pv.get("value")
+            kind = None
+            try:
+                ent = f.by_id(pv["id"])
+            except Exception:
+                ent = None
+            if ent is not None and isinstance(v, (int, float)) and not isinstance(v, bool):
+                unit = None
+                if ent.is_a() in QUANTITY_KIND:
+                    kind = QUANTITY_KIND[ent.is_a()]
+                    unit = getattr(ent, "Unit", None)
+                elif ent.is_a("IfcPropertySingleValue") and ent.NominalValue is not None:
+                    kind = MEASURE_KIND.get(ent.NominalValue.is_a())
+                    unit = ent.Unit
+                if kind:
+                    # явная единица свойства важнее единицы проекта
+                    sc = unit_si_scale(unit) if unit is not None else scales.get(kind, 1.0)
+                    v = float(v) * sc
+                    kinds[k] = kind
+            if isinstance(v, (list, tuple)):
+                v = ", ".join(str(x) for x in v)
+            elif v is not None and not isinstance(v, (int, float, str, bool)):
+                v = str(v)
+            clean[k] = v
+        psets[pname] = clean
+        if kinds:
+            measures[pname] = kinds
+    return psets, measures
+
+
 def _clean_psets(d):
     out = {}
     for pname, props in (d or {}).items():
@@ -122,6 +198,7 @@ def iter_ifc(filepath, include=None, exclude=DEFAULT_EXCLUDE, path_mode="element
     threads = threads or max(1, multiprocessing.cpu_count() - 1)
     it = ifcopenshell.geom.iterator(settings, f, threads, **kw)
     chainer = _Chain()
+    scales = _project_scales(f)
     total = len(f.by_type("IfcProduct"))
     n = 0
     if not it.initialize():
@@ -131,10 +208,10 @@ def iter_ifc(filepath, include=None, exclude=DEFAULT_EXCLUDE, path_mode="element
         e = f.by_id(shape.id)
         g = shape.geometry
         chain = chainer.chain(e)
-        storey = None
+        storey, storey_class = None, ""
         for a in reversed(chain[:-1]):
             if _is_spatial(a):
-                storey = _seg(a)
+                storey, storey_class = _seg(a), a.is_a()
                 break
         if path_mode == "full":
             segs = [_seg(a) for a in chain]
@@ -158,7 +235,8 @@ def iter_ifc(filepath, include=None, exclude=DEFAULT_EXCLUDE, path_mode="element
             "id": e.id(),
             "guid": getattr(e, "GlobalId", "") or "",
             "ifc_class": e.is_a(),
-            "predefined": ue.get_predefined_type(e) or "",
+            # только собственный PredefinedType элемента (тип из IfcTypeObject сюда не подмешиваем)
+            "predefined": (getattr(e, "PredefinedType", None) or "") if hasattr(e, "PredefinedType") else "",
             "name": getattr(e, "Name", "") or "",
             "object_type": getattr(e, "ObjectType", "") or "",
             "tag": getattr(e, "Tag", "") or "",
@@ -166,7 +244,9 @@ def iter_ifc(filepath, include=None, exclude=DEFAULT_EXCLUDE, path_mode="element
             "type_name": "",
             "path": "/" + "/".join(segs),
             "storey": storey or "",
+            "storey_class": storey_class,
             "psets": {},
+            "measures": {},
             "materials": [],
             "verts": us.get_vertices(g).copy(),
             "faces": us.get_faces(g).copy(),
@@ -177,7 +257,7 @@ def iter_ifc(filepath, include=None, exclude=DEFAULT_EXCLUDE, path_mode="element
         if t is not None:
             rec["type_name"] = t.Name or ""
         if psets:
-            rec["psets"] = _clean_psets(ue.get_psets(e))
+            rec["psets"], rec["measures"] = _element_psets(f, e, scales)
             try:
                 mats = ue.get_materials(e)
                 rec["materials"] = [m.Name for m in mats if getattr(m, "Name", None)]

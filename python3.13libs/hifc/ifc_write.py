@@ -11,7 +11,9 @@
         "guid":      "...22 символа...",   # необязательно; иначе детерминированный из path
         "storey":    "Level 1",            # необязательно; иначе opts.storey
         "material":  "Steel",             # необязательно -> IfcMaterial
-        "psets":     {"Pset_X": {"a": 1}}, # свойства
+        "psets":     {"Pset_X": {"a": 1}}, # свойства (без measures — в единицах проекта)
+        "measures":  {"Pset_X": {"a": "LENGTH"}},  # эти значения заданы в СИ (м, м², м³) и будут пересчитаны
+        "materials": ["Glass", "Wood"],   # несколько материалов -> IfcMaterialConstituentSet
         "items": [                         # части геометрии (одна часть = один стиль)
             {"verts": ndarray(N,3) в МЕТРАХ, IFC-оси (Z вверх),
              "faces": [[i, j, k, ...], ...],   # CCW снаружи (правило IFC)
@@ -79,6 +81,39 @@ def _valid_guid(g):
         return False
 
 
+STATUS_TEXT = {
+    "unknown": "not in the schema",
+    "not_product": "not a physical product (IfcProduct subtype)",
+    "abstract": "abstract",
+    "spatial": "a spatial container, not an element",
+}
+_NOT_EXPORTABLE = ("IfcProject", "IfcSite", "IfcBuilding", "IfcBuildingStorey",
+                   "IfcGrid", "IfcStructuralItem",
+                   "IfcPort", "IfcVirtualElement")
+
+
+def class_status(schema_identifier, cls):
+    """'ok' | 'unknown' | 'not_product' | 'abstract' | 'spatial' — можно ли писать класс как элемент с геометрией."""
+    import ifcopenshell.ifcopenshell_wrapper as w
+    try:
+        decl = w.schema_by_name(schema_identifier).declaration_by_name(cls)
+    except Exception:
+        return "unknown"
+    if decl is None or not hasattr(decl, "is_abstract"):
+        return "unknown"
+    if decl.is_abstract():
+        return "abstract"
+    chain, d = [], decl
+    while d is not None:
+        chain.append(d.name())
+        d = d.supertype()
+    if "IfcProduct" not in chain:
+        return "not_product"
+    if any(n in chain for n in _NOT_EXPORTABLE):
+        return "spatial"
+    return "ok"
+
+
 def _split_path(path):
     return [s for s in str(path or "").replace("\\", "/").split("/") if s]
 
@@ -93,6 +128,7 @@ class _Writer:
         self.styles = {}
         self.materials = {}
         self.material_members = {}
+        self.material_sets = {}
         self.storeys = {}
         self.container_members = {}
         self.assemblies = {}
@@ -115,6 +151,9 @@ class _Writer:
         angle = ifcopenshell.api.unit.add_si_unit(f, unit_type="PLANEANGLEUNIT")
         ifcopenshell.api.unit.assign_unit(f, units=[length, area, volume, angle])
         self.unit_scale = ifcopenshell.util.unit.calculate_unit_scale(f)  # метров в единице проекта
+        self.kind_scale = {"LENGTH": self.unit_scale,
+                           "AREA": ifcopenshell.util.unit.calculate_unit_scale(f, "AREAUNIT"),
+                           "VOLUME": ifcopenshell.util.unit.calculate_unit_scale(f, "VOLUMEUNIT")}
         model = ifcopenshell.api.context.add_context(f, context_type="Model")
         self.body = ifcopenshell.api.context.add_context(
             f, context_type="Model", context_identifier="Body", target_view="MODEL_VIEW", parent=model
@@ -163,19 +202,16 @@ class _Writer:
         return s
 
     # ---------- классы ----------
-    def create_product(self, ifc_class, predefined, name):
-        """Создаёт элемент; неверный класс -> default_class, неверный тип -> USERDEFINED."""
+    def create_product(self, ifc_class, predefined, name, object_type=None):
+        """Создаёт элемент. Недопустимый класс -> default_class (с предупреждением), неверный тип -> USERDEFINED."""
         f = self.f
         cls = ifc_class or self.o["default_class"]
         if cls not in self.class_cache:
-            try:
-                decl = f.schema_identifier and ifcopenshell.ifcopenshell_wrapper.schema_by_name(f.schema_identifier).declaration_by_name(cls)
-                ok = decl is not None
-            except Exception:
-                ok = False
-            if not ok:
-                self.warnings.append("Unknown class '%s' for schema %s -> %s" % (cls, f.schema, self.o["default_class"]))
-            self.class_cache[cls] = cls if ok else self.o["default_class"]
+            status = class_status(f.schema_identifier, cls)
+            if status != "ok":
+                self.warnings.append("Class '%s' is %s for schema %s -> %s" % (
+                    cls, STATUS_TEXT[status], f.schema, self.o["default_class"]))
+            self.class_cache[cls] = cls if status == "ok" else self.o["default_class"]
         cls = self.class_cache[cls]
         orig_cls = cls
         if self._needs_host(cls):
@@ -183,19 +219,22 @@ class _Writer:
             self.warnings.append("%s needs a host element -> IfcBuildingElementProxy (ObjectType=%s)" % (cls, cls))
             cls = "IfcBuildingElementProxy"
         pt = (predefined or "").strip() or None
-        try:
-            e = ifcopenshell.api.root.create_entity(f, ifc_class=cls, predefined_type=pt, name=name)
-        except Exception:
-            e = ifcopenshell.api.root.create_entity(f, ifc_class=cls, name=name)
-            if pt and hasattr(e, "PredefinedType"):
+        e = ifcopenshell.api.root.create_entity(f, ifc_class=cls, name=name)
+        if pt and hasattr(e, "PredefinedType"):
+            try:
+                e.PredefinedType = pt
+            except Exception:
+                # значения нет в перечислении класса -> USERDEFINED + текст в ObjectType
                 try:
                     e.PredefinedType = "USERDEFINED"
-                    if hasattr(e, "ObjectType"):
-                        e.ObjectType = pt
+                    if hasattr(e, "ObjectType") and not object_type:
+                        object_type = pt
                 except Exception:
                     pass
         if orig_cls != cls and hasattr(e, "ObjectType"):
-            e.ObjectType = orig_cls
+            object_type = orig_cls
+        if object_type and hasattr(e, "ObjectType"):
+            e.ObjectType = object_type
         self._fill_required_enums(e)
         return e
 
@@ -269,15 +308,41 @@ class _Writer:
             self.styles[key] = s
         return s
 
-    def use_material(self, name, product, style):
-        m = self.materials.get(name)
-        if m is None:
-            m = ifcopenshell.api.material.add_material(self.f, name=name)
-            self.materials[name] = m
-            self.material_members[name] = []
-            if style is not None:
-                ifcopenshell.api.style.assign_material_style(self.f, material=m, style=style, context=self.body)
-        self.material_members[name].append(product)
+    def use_material(self, names, product, style):
+        """names: строка или список. Один материал -> IfcMaterial, несколько -> набор составляющих (IFC2X3: список)."""
+        if isinstance(names, str):
+            names = [names]
+        names = [n for n in names if n]
+        if not names:
+            return
+        mats = []
+        for name in names:
+            m = self.materials.get(name)
+            if m is None:
+                m = ifcopenshell.api.material.add_material(self.f, name=name)
+                self.materials[name] = m
+                if style is not None and len(names) == 1:
+                    ifcopenshell.api.style.assign_material_style(self.f, material=m, style=style, context=self.body)
+            mats.append(m)
+        key = tuple(names)
+        if key not in self.material_members:
+            self.material_members[key] = []
+            if len(mats) == 1:
+                self.material_sets[key] = mats[0]
+            elif self.f.schema == "IFC2X3":
+                self.material_sets[key] = self.f.createIfcMaterialList(mats)
+            else:
+                ms = ifcopenshell.api.material.add_material_set(
+                    self.f, name=" + ".join(names), set_type="IfcMaterialConstituentSet")
+                for m in mats:
+                    ifcopenshell.api.material.add_constituent(self.f, constituent_set=ms, material=m)
+                self.material_sets[key] = ms
+        self.material_members[key].append(product)
+
+    def _measure(self, kind, value_si):
+        """СИ -> единицы проекта, типизированное значение IFC (IfcLengthMeasure и т.п.)."""
+        cls = {"LENGTH": "IfcLengthMeasure", "AREA": "IfcAreaMeasure", "VOLUME": "IfcVolumeMeasure"}[kind]
+        return self.f.create_entity(cls, float(value_si) / self.kind_scale[kind])
 
     # ---------- элемент ----------
     def add_element(self, el):
@@ -286,9 +351,9 @@ class _Writer:
         name = el.get("name") or (segs[-1] if segs else "Element")
         storey_name = el.get("storey") or self.o["storey"]
         self.get_storey(storey_name)
-        product = self.create_product(el.get("ifc_class"), el.get("predefined"), name)
+        product = self.create_product(el.get("ifc_class"), el.get("predefined"), name, el.get("objecttype"))
         self._set_guid(product, "el|%s|/%s" % (storey_name, "/".join(segs) or name), el.get("guid"))
-        for attr in ("Description", "ObjectType", "Tag"):
+        for attr in ("Description", "Tag"):
             v = el.get(attr.lower())
             if v and hasattr(product, attr):
                 setattr(product, attr, v)
@@ -319,25 +384,34 @@ class _Writer:
         else:
             origin = None
 
+        all_measures = el.get("measures") or {}
         for pname, props in (el.get("psets") or {}).items():
             props = {k: v for k, v in (props or {}).items() if v is not None and k != "id"}
             if not props:
                 continue
+            # величины с известным видом (из d@ifc_measures) заданы в СИ -> пересчёт в единицы проекта
+            kinds = all_measures.get(pname) or {}
+            for k, kind in kinds.items():
+                v = props.get(k)
+                if kind in self.kind_scale and isinstance(v, (int, float)) and not isinstance(v, bool):
+                    props[k] = self._measure(kind, v)
             # Qto_* -> IfcElementQuantity (только числа), остальное -> IfcPropertySet
             is_qto = str(pname).startswith("Qto_") and all(
-                isinstance(v, (int, float)) and not isinstance(v, bool) for v in props.values())
+                isinstance(v, ifcopenshell.entity_instance) or (isinstance(v, (int, float)) and not isinstance(v, bool))
+                for v in props.values())
             try:
                 if is_qto:
                     q = ifcopenshell.api.pset.add_qto(f, product=product, name=str(pname))
-                    ifcopenshell.api.pset.edit_qto(f, qto=q, properties={k: float(v) for k, v in props.items()})
+                    ifcopenshell.api.pset.edit_qto(f, qto=q, properties={
+                        k: (v if isinstance(v, ifcopenshell.entity_instance) else float(v)) for k, v in props.items()})
                 else:
                     p = ifcopenshell.api.pset.add_pset(f, product=product, name=str(pname))
                     ifcopenshell.api.pset.edit_pset(f, pset=p, properties=props)
             except Exception as ex:
                 self.warnings.append("Pset %s on %s: %s" % (pname, name, ex))
 
-        if el.get("material"):
-            self.use_material(el["material"], product, first_style)
+        if el.get("materials") or el.get("material"):
+            self.use_material(el.get("materials") or el["material"], product, first_style)
 
         parent = self.get_parent(storey_name, segs[:-1])
         # все родители (этаж, сборки) стоят в нуле -> локальная плейсмент = мировая
@@ -388,9 +462,10 @@ class _Writer:
         for sname, members in self.container_members.items():
             if members:
                 f.createIfcRelContainedInSpatialStructure(self._new_guid(), oh, None, None, members, self.storeys[sname])
-        for mname, members in self.material_members.items():
+        for key, members in self.material_members.items():
             if members:
-                ifcopenshell.api.material.assign_material(f, products=members, material=self.materials[mname])
+                ifcopenshell.api.material.assign_material(
+                    f, products=members, type=self.material_sets[key].is_a(), material=self.material_sets[key])
 
 
 def write_ifc(elements, filepath, options=None, progress=None, log=print):

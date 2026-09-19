@@ -45,7 +45,9 @@ Bonsai add-on for Blender, and does not need Blender.
 | `s@ifc_storey` | Building storey. |
 | `s@ifc_name`, `s@ifc_tag`, `s@ifc_object_type`, `s@ifc_description` | Name, mark, type, description. |
 | `s@ifc_material`, `Cd`, `f@Alpha`, `s@ifc_style` | Material and surface style. |
-| `d@ifc_psets` | `{SetName: {Property: value}}`. `Qto_*` sets become quantities. Lengths are in project units (mm by default). |
+| `d@ifc_psets` | `{SetName: {Property: value}}`. `Qto_*` sets become quantities. Plain numbers are written in project units (mm by default). |
+| `d@ifc_measures` | `{SetName: {Property: "LENGTH"/"AREA"/"VOLUME"}}`: these values are in SI and are converted to the file units. Filled by the importer. |
+| `s[]@ifc_materials` | Several materials -> `IfcMaterialConstituentSet`. |
 | `s@ifc_guid` | Optional fixed GlobalId. If missing, a stable one is derived from path + storey. |
 
 For the full guide, open the node help (F1). For a ready-made template, use **HIFC › Create Attribute Template**.
@@ -69,16 +71,20 @@ Test data comes from the official buildingSMART
 
 ```bash
 python tests/fetch_datasets.py
+python tests/test_core.py
 python tests/roundtrip.py
 ```
 
 See [tests/README.md](tests/README.md) for the reference results.
 
-## Limitations (0.1)
+## Limitations (0.2)
 
 * Geometry is exported as meshes (`IfcPolygonalFaceSet`). There are no parametric extrusions or profiles yet.
-* Type objects (`IfcTypeProduct`), openings and host/opening relations are not written.
-* Every spatial container is exported as `IfcBuildingStorey`.
+* Type objects (`IfcTypeProduct`), openings and host/opening relations are not written;
+  `IfcSurfaceFeature` is exported as a proxy.
+* Every spatial container (site, facility part, road part...) is exported as `IfcBuildingStorey`.
+* Material layers/profiles are flattened to a constituent set (names only, no thicknesses).
+* Georeferenced models with very large coordinates are not tested yet (Houdini stores positions in float32).
 
 ## License
 

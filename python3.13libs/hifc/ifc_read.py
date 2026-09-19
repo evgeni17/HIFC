@@ -41,8 +41,16 @@ def _seg(e):
     return _bad.sub("_", n) if n else "%s_%d" % (e.is_a(), e.id())
 
 
+_SPATIAL_CACHE = {}
+
+
 def _is_spatial(e):
-    return any(e.is_a(c) for c in SPATIAL_ROOTS if _schema_has(e, c))
+    # кэш по классу: проверка через схему дорогая, а классов в файле немного
+    k = (e.is_a(), id(e.wrapped_data.declaration().schema()) if hasattr(e, "wrapped_data") else 0)
+    v = _SPATIAL_CACHE.get(k)
+    if v is None:
+        v = _SPATIAL_CACHE[k] = any(e.is_a(c) for c in SPATIAL_ROOTS if _schema_has(e, c))
+    return v
 
 
 def _schema_has(e, cls):
@@ -118,7 +126,137 @@ def _project_scales(f):
     return out
 
 
-def _element_psets(f, e, scales):
+def _simple_value(v):
+    if v is None:
+        return None
+    if isinstance(v, (list, tuple)):
+        return ", ".join(str(_simple_value(x)) for x in v)
+    if hasattr(v, "wrappedValue"):
+        return v.wrappedValue
+    return v
+
+
+def _read_propdef(d, scales, out, kinds_out):
+    """Одно определение свойств (IfcPropertySet / IfcElementQuantity) -> out[name], kinds_out[name].
+
+    Доступ к атрибутам по индексам (быстрее, чем по имени): это самая горячая функция импорта.
+    IfcPropertySingleValue: 0 Name, 2 NominalValue, 3 Unit; IfcPhysicalSimpleQuantity: 0 Name, 2 Unit, 3 value.
+    """
+    dcls = d.is_a()
+    name = d[2] or dcls
+    props, kinds = out.setdefault(name, {}), kinds_out.setdefault(name, {})
+    if dcls == "IfcPropertySet":
+        for p in d[4] or ():
+            pcls = p.is_a()
+            kind = None
+            if pcls == "IfcPropertySingleValue":
+                nv = p[2]
+                if nv is None:
+                    v = None
+                else:
+                    v = nv.wrappedValue
+                    kind = MEASURE_KIND.get(nv.is_a())
+            elif pcls == "IfcPropertyEnumeratedValue":
+                v = _simple_value(p[2])
+            elif pcls == "IfcPropertyListValue":
+                v = _simple_value(p[2])
+            elif pcls == "IfcPropertyBoundedValue":
+                v = "%s..%s" % (_simple_value(p[3]), _simple_value(p[2]))
+            else:
+                continue
+            pname = p[0]
+            if kind and isinstance(v, (int, float)) and not isinstance(v, bool):
+                unit = p[3]
+                v = float(v) * (unit_si_scale(unit) if unit is not None else scales.get(kind, 1.0))
+                kinds[pname] = kind
+            elif kinds:
+                kinds.pop(pname, None)
+            props[pname] = v
+    else:  # IfcElementQuantity
+        for q in d[5] or ():
+            qcls = q.is_a()
+            kind = QUANTITY_KIND.get(qcls)
+            if kind is None and not q.is_a("IfcPhysicalSimpleQuantity"):
+                continue
+            v = q[3]
+            if kind and isinstance(v, (int, float)):
+                u = q[2]
+                v = float(v) * (unit_si_scale(u) if u is not None else scales.get(kind, 1.0))
+                kinds[q[0]] = kind
+            props[q[0]] = v
+    if not kinds:
+        kinds_out.pop(name, None)
+
+
+def _defs_of(obj):
+    """Определения свойств объекта (occurrence) или типа."""
+    if obj.is_a("IfcTypeObject"):
+        return list(obj.HasPropertySets or ())
+    out = []
+    for rel in getattr(obj, "IsDefinedBy", None) or ():
+        if rel.is_a("IfcRelDefinesByProperties"):
+            d = rel.RelatingPropertyDefinition
+            out.extend(d if isinstance(d, (list, tuple)) else [d])
+    return out
+
+
+_PSET_CLASSES = ("IfcPropertySet", "IfcElementQuantity")
+
+
+class _PsetReader:
+    """Быстрое чтение наборов свойств с кэшем по типам (у многих элементов один тип)."""
+
+    def __init__(self, scales, names=None):
+        self.scales = scales
+        self.type_cache = {}
+        self.names = [n for n in (names or ()) if n]  # маски имён наборов; пусто = все
+        self._name_ok = {}
+
+    def _wanted(self, name):
+        if not self.names:
+            return True
+        ok = self._name_ok.get(name)
+        if ok is None:
+            import fnmatch
+            inc = [p for p in self.names if not p.startswith("^")] or ["*"]
+            exc = [p[1:] for p in self.names if p.startswith("^")]
+            ok = self._name_ok[name] = (any(fnmatch.fnmatchcase(name, p) for p in inc)
+                                        and not any(fnmatch.fnmatchcase(name, p) for p in exc))
+        return ok
+
+    def _read(self, obj):
+        out, kinds = {}, {}
+        for d in _defs_of(obj):
+            if d is not None and d.is_a() in _PSET_CLASSES and self._wanted(d[2] or ""):
+                _read_propdef(d, self.scales, out, kinds)
+        return out, kinds
+
+    def read(self, e):
+        psets, measures = {}, {}
+        t = ue.get_type(e)
+        if t is not None:
+            c = self.type_cache.get(t.id())
+            if c is None:
+                c = self.type_cache[t.id()] = self._read(t)
+            for k, v in c[0].items():
+                psets[k] = dict(v)
+            for k, v in c[1].items():
+                measures[k] = dict(v)
+        o_ps, o_ms = self._read(e)
+        for k, v in o_ps.items():
+            psets.setdefault(k, {}).update(v)
+            if k in o_ms:
+                measures.setdefault(k, {}).update(o_ms[k])
+            elif k in measures:
+                # свойство перекрыто экземпляром без единицы — убираем пометку для перекрытых
+                for pk in v:
+                    measures[k].pop(pk, None)
+                if not measures[k]:
+                    measures.pop(k)
+        return {k: v for k, v in psets.items() if v}, measures
+
+
+def _element_psets_slow(f, e, scales):
     """Наборы свойств + пересчёт измеряемых величин в СИ. Возвращает (psets, measures)."""
     psets, measures = {}, {}
     raw = ue.get_psets(e, verbose=True)
@@ -174,7 +312,7 @@ def _clean_psets(d):
 
 
 def iter_ifc(filepath, include=None, exclude=DEFAULT_EXCLUDE, path_mode="elements",
-             psets=True, threads=0, progress=None):
+             psets=True, threads=0, progress=None, pset_names=None):
     """Генератор элементов. include/exclude — списки имён классов IFC.
 
     path_mode: "elements" — путь от первой непространственной сборки (для экспорта обратно);
@@ -199,6 +337,7 @@ def iter_ifc(filepath, include=None, exclude=DEFAULT_EXCLUDE, path_mode="element
     it = ifcopenshell.geom.iterator(settings, f, threads, **kw)
     chainer = _Chain()
     scales = _project_scales(f)
+    pset_reader = _PsetReader(scales, pset_names)
     total = len(f.by_type("IfcProduct"))
     n = 0
     if not it.initialize():
@@ -257,7 +396,7 @@ def iter_ifc(filepath, include=None, exclude=DEFAULT_EXCLUDE, path_mode="element
         if t is not None:
             rec["type_name"] = t.Name or ""
         if psets:
-            rec["psets"], rec["measures"] = _element_psets(f, e, scales)
+            rec["psets"], rec["measures"] = pset_reader.read(e)
             try:
                 mats = ue.get_materials(e)
                 rec["materials"] = [m.Name for m in mats if getattr(m, "Name", None)]

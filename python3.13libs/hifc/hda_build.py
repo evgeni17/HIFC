@@ -48,9 +48,19 @@ def _import_ptg():
     f.addParmTemplate(hou.FloatParmTemplate("scale", "Scale (units per meter)", 1, default_value=(1.0,), min=0.0001, max=1000))
     f.addParmTemplate(hou.ToggleParmTemplate("color", "Colors from IFC Styles", default_value=True))
     f.addParmTemplate(hou.ToggleParmTemplate("psets", "Read Property Sets", default_value=True))
+    f.addParmTemplate(hou.StringParmTemplate("psetfilter", "Property Sets", 1, default_value=("*",),
+                                             help="Globs of property/quantity set names to read, e.g. Pset_* Qto_*. "
+                                                  "Fewer sets = faster import.",
+                                             conditionals={hou.parmCondType.DisableWhen: "{ psets == 0 }"}))
     f.addParmTemplate(hou.ToggleParmTemplate("flatten", "Flatten Psets to Attributes", default_value=False,
                                              conditionals={hou.parmCondType.DisableWhen: "{ psets == 0 }"}))
     f.addParmTemplate(hou.IntParmTemplate("threads", "Threads (0 = auto)", 1, default_value=(0,), min=0, max=64))
+    f.addParmTemplate(hou.ToggleParmTemplate("diskcache", "Disk Cache", default_value=True,
+                                             help="Keep parsed elements in $HOUDINI_TEMP_DIR/hifc_cache: "
+                                                  "re-opening the same unchanged file is almost instant."))
+    f.addParmTemplate(hou.ButtonParmTemplate("cleardisk", "Clear Disk Cache",
+                                             script_callback="import hifc.sop_import as m; m.clear_disk_cache(kwargs)",
+                                             script_callback_language=hou.scriptLanguage.Python))
     g.append(f)
     return g
 
@@ -111,6 +121,9 @@ def _export_ptg():
                               ("measuresattrib", "Measures Dict Attribute", "ifc_measures")):
         f.addParmTemplate(hou.StringParmTemplate(name, label, 1, default_value=(dflt,)))
     f.addParmTemplate(hou.SeparatorParmTemplate("sep1"))
+    f.addParmTemplate(hou.StringParmTemplate("psetexport", "Property Sets to Export", 1, default_value=("*",),
+                                             help="Globs of set names from the psets dictionary; ^glob excludes, "
+                                                  "e.g. * ^ArchiCADProperties"))
     f.addParmTemplate(hou.StringParmTemplate("psetname", "Pset Name", 1, default_value=("HoudiniAttributes",)))
     f.addParmTemplate(hou.StringParmTemplate("psetattribs", "Attributes to Pset", 1, default_value=("",),
                                              help="Prim attribute globs, e.g. len_* N_*"))
@@ -197,6 +210,12 @@ def build_export(otls=None):
     if tp is not None:
         # цвет/прозрачность с packed-примитива не должны затирать цвета граней внутри (режим Per Face)
         tp.setExpression('ifs(ch("../packedcolor"), "*", "* ^Cd ^Alpha ^ifc_style")', hou.exprLanguage.Hscript)
+    # вершинные атрибуты для быстрого чтения полигонов при экспорте (см. sop_export.PREP_VEX)
+    from .sop_export import PREP_VEX
+    prep = sub.createNode("attribwrangle", "PREP")
+    prep.setInput(0, unpack)
+    prep.parm("class").set(3)  # Vertices
+    prep.parm("snippet").set(PREP_VEX)
     out = sub.createNode("output", "OUT")
     out.setInput(0, sub.indirectInputs()[0])
     path = os.path.join(otls or OTLS, "hifc_ifc_export.hda")

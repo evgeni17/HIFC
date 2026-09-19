@@ -154,6 +154,7 @@ d@ifc_psets = ps;
 * Наборы `Qto_...` с числовыми значениями пишутся как IfcElementQuantity (количества для смет).
 * *Единицы:* числа в `d@ifc_psets` пишутся как есть, в единицах проекта IFC (параметр Length Unit, по умолчанию *мм*). Умножайте метры Houdini на 1000.
 * *Величины с единицами — `d@ifc_measures`* вида `{ИмяНабора: {Свойство: "LENGTH" | "AREA" | "VOLUME"}}`. Отмеченные так значения считаются заданными в СИ (м, м², м³) и пересчитываются в единицы файла автоматически, с правильным типом IFC (IfcLengthMeasure и т.д.). HIFC IFC Import заполняет этот атрибут сам, поэтому импорт -> экспорт не искажает количества при смене единиц.
+* __Property Sets to Export__ — какие наборы из словаря писать (маски, `^маска` — исключить): лишние наборы производителя ПО заметно замедляют запись больших моделей.
 * Быстрый способ без словаря: перечислите атрибуты в __Attributes to Pset__ (маски, например `len_* N_*`) — они попадут в набор __Pset Name__ (HoudiniAttributes).
 * __Add Houdini_Path Property__ добавляет исходный path в этот же набор — удобно для обратной связи.
 
@@ -235,6 +236,10 @@ Path:
     "From First Assembly" — путь от первой сборки (для обратного экспорта); "Full" — от IfcProject.
 Include / Exclude Classes:
     Фильтр по классам через пробел.
+Property Sets:
+    Какие наборы свойств читать (маски, `^маска` — исключить), например `Pset_* Qto_*` или `* ^ArchiCADProperties`. Чтение свойств — самая долгая часть импорта: меньше наборов — быстрее.
+Disk Cache:
+    Разобранные элементы сохраняются в `$HOUDINI_TEMP_DIR/hifc_cache`; повторное открытие того же (неизменённого) файла — почти мгновенно, в том числе в новой сессии. Кнопка __Clear Disk Cache__ очищает кэш.
 
 @attributes
 
@@ -394,6 +399,7 @@ d@ifc_psets = ps;
 * `Qto_...` sets with numeric values are written as IfcElementQuantity (quantities for cost estimates).
 * *Units:* numbers in `d@ifc_psets` are written as is, in IFC project units (Length Unit parameter, *millimetres* by default). Multiply Houdini metres by 1000.
 * *Values with units: `d@ifc_measures`*, `{SetName: {Property: "LENGTH" | "AREA" | "VOLUME"}}`. Values marked this way are in SI (m, m², m³) and are converted to the file units automatically, with the proper IFC type (IfcLengthMeasure etc.). HIFC IFC Import fills this attribute, so import -> export keeps quantities correct when units change.
+* __Property Sets to Export__ selects which sets from the dictionary are written (globs, `^glob` excludes): vendor sets you do not need slow down large exports noticeably.
 * Quick way without a dictionary: list attributes in __Attributes to Pset__ (globs such as `len_* N_*`); they go to the __Pset Name__ set (HoudiniAttributes).
 * __Add Houdini_Path Property__ adds the source path to that set, handy for tracing back.
 
@@ -475,6 +481,10 @@ Path:
     "From First Assembly" gives paths from the first assembly (for re-export); "Full" starts at IfcProject.
 Include / Exclude Classes:
     Space-separated class filter.
+Property Sets:
+    Which property/quantity sets to read (globs, `^glob` excludes), e.g. `Pset_* Qto_*` or `* ^ArchiCADProperties`. Reading properties is the slowest part of import: fewer sets = faster.
+Disk Cache:
+    Parsed elements are stored in `$HOUDINI_TEMP_DIR/hifc_cache`; re-opening the same unchanged file is almost instant, also in a new session. __Clear Disk Cache__ empties it.
 
 @attributes
 

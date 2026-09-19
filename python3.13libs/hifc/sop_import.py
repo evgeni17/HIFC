@@ -52,22 +52,59 @@ def clear_cache(kwargs=None):
         inner.cook(force=True)
 
 
-def _load(path, include, exclude, path_mode, psets, threads):
-    from . import ifc_read
+def _cache_file(key):
+    import hashlib
+    d = os.path.join(hou.text.expandString("$HOUDINI_TEMP_DIR"), "hifc_cache")
+    return os.path.join(d, hashlib.sha1(repr(key).encode("utf-8")).hexdigest() + ".pkl")
 
-    key = (path, os.path.getmtime(path), tuple(include), tuple(exclude), path_mode, psets)
+
+def _load(path, include, exclude, path_mode, psets, threads, pset_names=None, disk_cache=True):
+    """Записи элементов: кэш в памяти -> дисковый кэш ($HOUDINI_TEMP_DIR/hifc_cache) -> чтение IFC."""
+    import pickle
+    from . import __version__, ifc_read
+
+    st = os.stat(path)
+    key = (__version__, path, st.st_mtime, st.st_size, tuple(include), tuple(exclude), path_mode, psets,
+           tuple(pset_names or ()))
     recs = _CACHE.get(key)
+    if recs is None and disk_cache:
+        cf = _cache_file(key)
+        if os.path.exists(cf):
+            try:
+                with open(cf, "rb") as fh:
+                    recs = pickle.load(fh)
+            except Exception:
+                recs = None
     if recs is None:
         with hou.InterruptableOperation("HIFC: reading IFC", open_interrupt_dialog=True) as op:
             def progress(i, n):
                 op.updateProgress(min(1.0, float(i) / max(1, n)))
             recs = ifc_read.uniquify_paths(list(ifc_read.iter_ifc(
                 path, include=include or None, exclude=exclude, path_mode=path_mode,
-                psets=psets, threads=threads, progress=progress)))
-        if len(_CACHE) >= _CACHE_MAX:
-            _CACHE.pop(next(iter(_CACHE)))
-        _CACHE[key] = recs
+                psets=psets, threads=threads, progress=progress, pset_names=pset_names)))
+        if disk_cache:
+            try:
+                cf = _cache_file(key)
+                os.makedirs(os.path.dirname(cf), exist_ok=True)
+                with open(cf + ".tmp", "wb") as fh:
+                    pickle.dump(recs, fh, protocol=pickle.HIGHEST_PROTOCOL)
+                os.replace(cf + ".tmp", cf)
+            except Exception:
+                pass
+    if len(_CACHE) >= _CACHE_MAX and key not in _CACHE:
+        _CACHE.pop(next(iter(_CACHE)))
+    _CACHE[key] = recs
     return recs
+
+
+def clear_disk_cache(kwargs=None):
+    import shutil
+    d = os.path.join(hou.text.expandString("$HOUDINI_TEMP_DIR"), "hifc_cache")
+    shutil.rmtree(d, ignore_errors=True)
+    _CACHE.clear()
+    if kwargs and kwargs.get("node") is not None:
+        inner = kwargs["node"].node("IFC_READ") or kwargs["node"]
+        inner.cook(force=True)
 
 
 def _to_houdini(v, y_up, scale):
@@ -185,34 +222,36 @@ def cook(node):
     want_color = bool(_ev(owner, "color", 1))
     threads = int(_ev(owner, "threads", 0))
 
-    recs = _load(path, include, exclude, path_mode, want_psets, threads)
+    pset_names = [p for p in re.split(r"[\s,;]+", _ev(owner, "psetfilter", "*")) if p]
+    if pset_names == ["*"]:
+        pset_names = None
+    disk_cache = bool(_ev(owner, "diskcache", 1))
+    recs = _load(path, include, exclude, path_mode, want_psets, threads, pset_names, disk_cache)
 
-    if packed:
-        _cook_packed(geo, recs, y_up, scale, want_color)
-    else:
-        _cook_polys(geo, recs, y_up, scale, want_color)
-
-    # атрибуты элементов: в packed — по одному на примитив, в polys — повторяем по треугольникам
-    counts = [1 if packed else len(r["faces"]) for r in recs]
-    def rep(values):
-        out = []
-        for v, c in zip(values, counts):
-            out.extend([v] * c)
-        return out
+    # элементы и их атрибуты пишем один раз на packed-примитив; режим Polygons — это Unpack,
+    # который копирует атрибуты в C++ (раньше словари писались по одному на каждый треугольник)
+    pk = geo if packed else hou.Geometry()
+    _cook_packed(pk, recs, y_up, scale, want_color)
 
     for attr, key in REC_STR_ATTRS:
-        _prim_string_attr(geo, attr, rep([r[key] for r in recs]))
-    _prim_int_attr(geo, "ifc_id", rep([r["id"] for r in recs]))
+        _prim_string_attr(pk, attr, [r[key] for r in recs])
+    _prim_int_attr(pk, "ifc_id", [r["id"] for r in recs])
     # один материал -> s@ifc_material; полный список (наборы материалов) -> s[]@ifc_materials
-    _prim_string_attr(geo, "ifc_material", rep([r["materials"][0] if len(r["materials"]) == 1 else "" for r in recs]))
+    _prim_string_attr(pk, "ifc_material", [r["materials"][0] if len(r["materials"]) == 1 else "" for r in recs])
     if any(len(r["materials"]) > 1 for r in recs):
-        _prim_string_array_attr(geo, "ifc_materials", rep([r["materials"] for r in recs]))
+        _prim_string_array_attr(pk, "ifc_materials", [r["materials"] for r in recs])
     if want_psets:
-        _prim_dict_attr(geo, "ifc_psets", rep([r["psets"] for r in recs]))
+        _prim_dict_attr(pk, "ifc_psets", [r["psets"] for r in recs])
         # какие свойства — длины/площади/объёмы в СИ (нужно экспорту для пересчёта единиц)
-        _prim_dict_attr(geo, "ifc_measures", rep([r.get("measures") or {} for r in recs]))
+        _prim_dict_attr(pk, "ifc_measures", [r.get("measures") or {} for r in recs])
         if flatten:
-            _flatten_psets(geo, recs, rep)
+            _flatten_psets(pk, recs, lambda v: v)
+
+    if not packed:
+        verb = hou.sopNodeTypeCategory().nodeVerbs()["unpack"]
+        # цвет packed-примитива (первая грань) не должен затирать цвета граней внутри
+        verb.setParms({"transfer_attributes": "* ^Cd ^Alpha ^ifc_style"})
+        verb.execute(geo, [pk])
 
     # сводка в detail-атрибутах
     geo.addAttrib(hou.attribType.Global, "ifc_file", "")
@@ -233,27 +272,6 @@ def _flatten_psets(geo, recs, rep):
             _prim_float_attr(geo, name, rep([float(vals.get(i) or 0.0) for i in range(len(recs))]))
         else:
             _prim_string_attr(geo, name, rep(["" if vals.get(i) is None else str(vals.get(i)) for i in range(len(recs))]))
-
-
-def _cook_polys(geo, recs, y_up, scale, want_color):
-    allv, allf, cols, snames = [], [], [], []
-    off = 0
-    for r in recs:
-        v = _to_houdini(r["verts"], y_up, scale)
-        allv.append(v)
-        allf.append(r["faces"] + off)
-        off += len(v)
-        if want_color:
-            cols.append(_face_colors(r))
-            snames.extend(_face_style_names(r))
-    if not allv:
-        return
-    _build_mesh(geo, np.concatenate(allv), np.concatenate(allf))
-    if want_color:
-        c = np.concatenate(cols)
-        _prim_float_attr(geo, "Cd", c[:, :3], 3)
-        _prim_float_attr(geo, "Alpha", c[:, 3], default=1.0)
-        _prim_string_attr(geo, "ifc_style", snames)
 
 
 def _cook_packed(geo, recs, y_up, scale, want_color):

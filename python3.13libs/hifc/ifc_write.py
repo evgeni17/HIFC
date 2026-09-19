@@ -135,6 +135,9 @@ class _Writer:
         self.aggregate_members = {}
         self.class_cache = {}
         self._zero_axis = None
+        self._tmpl_cache = {}
+        self._templates = None
+        self._oh_cache = None
 
     # ---------- проект ----------
     def create_project(self):
@@ -339,6 +342,77 @@ class _Writer:
                 self.material_sets[key] = ms
         self.material_members[key].append(product)
 
+    def _face_set(self, local, faces):
+        """Только треугольники -> IfcTriangulatedFaceSet (одна сущность вместо тысяч граней), иначе полигональный."""
+        f = self.f
+        if faces and all(len(fc) == 3 for fc in faces):
+            pts = f.createIfcCartesianPointList3D([tuple(map(float, p)) for p in local])
+            idx = (np.asarray(faces, dtype=np.int64) + 1).tolist()
+            return f.create_entity("IfcTriangulatedFaceSet", Coordinates=pts, CoordIndex=idx, Closed=None)
+        return self.builder.polygonal_face_set(local.tolist(), faces)
+
+    # ---------- быстрые наборы свойств ----------
+    _PY_MEASURE = ((bool, "IfcBoolean"), (int, "IfcInteger"), (float, "IfcReal"), (str, "IfcLabel"))
+
+    def _template_types(self, pname):
+        """{свойство: (TemplateType, PrimaryMeasureType)} из шаблонов buildingSMART, с кэшем."""
+        c = self._tmpl_cache.get(pname)
+        if c is None:
+            c = {}
+            if pname.startswith("Pset_"):
+                try:
+                    if self._templates is None:
+                        import ifcopenshell.util.pset
+                        self._templates = ifcopenshell.util.pset.get_template(self.f.schema_identifier)
+                    t = self._templates.get_by_name(pname)
+                    for pt in (t.HasPropertyTemplates if t is not None else ()):
+                        c[pt.Name] = (pt.TemplateType, pt.PrimaryMeasureType)
+                except Exception:
+                    c = {}
+            self._tmpl_cache[pname] = c
+        return c
+
+    def _nominal(self, value, measure):
+        f = self.f
+        if isinstance(value, ifcopenshell.entity_instance):
+            return value
+        if measure:
+            try:
+                return f.create_entity(measure, value)
+            except Exception:
+                try:
+                    cast = float if isinstance(value, (int, float)) and not isinstance(value, bool) else str
+                    return f.create_entity(measure, cast(value))
+                except Exception:
+                    pass
+        for py, m in self._PY_MEASURE:
+            if isinstance(value, py):
+                if m == "IfcLabel" and len(value) > 255:
+                    m = "IfcText"
+                return f.create_entity(m, value)
+        return f.create_entity("IfcLabel", str(value))
+
+    def _fast_pset(self, product, pname, props):
+        """IfcPropertySet без api (в разы быстрее на тысячах элементов). False -> нужен общий путь."""
+        tmpl = self._template_types(pname)
+        if any(tmpl.get(k, ("P_SINGLEVALUE",))[0] != "P_SINGLEVALUE" for k in props):
+            return False  # перечисления/списки по шаблону — через ifcopenshell.api
+        f = self.f
+        items = []
+        for k, v in props.items():
+            items.append(f.create_entity("IfcPropertySingleValue", Name=str(k),
+                                         NominalValue=self._nominal(v, tmpl.get(k, (None, None))[1])))
+        oh = self._oh()
+        ps = f.create_entity("IfcPropertySet", GlobalId=self._new_guid(), OwnerHistory=oh, Name=pname, HasProperties=items)
+        f.create_entity("IfcRelDefinesByProperties", GlobalId=self._new_guid(), OwnerHistory=oh,
+                        RelatedObjects=[product], RelatingPropertyDefinition=ps)
+        return True
+
+    def _oh(self):
+        if self._oh_cache is None and self.f.schema == "IFC2X3":
+            self._oh_cache = self._owner_history()
+        return self._oh_cache
+
     def _measure(self, kind, value_si):
         """СИ -> единицы проекта, типизированное значение IFC (IfcLengthMeasure и т.п.)."""
         cls = {"LENGTH": "IfcLengthMeasure", "AREA": "IfcAreaMeasure", "VOLUME": "IfcVolumeMeasure"}[kind]
@@ -370,7 +444,7 @@ class _Writer:
                 if f.schema == "IFC2X3":
                     item = self.builder.faceted_brep(local.tolist(), faces)
                 else:
-                    item = self.builder.polygonal_face_set(local.tolist(), faces)
+                    item = self._face_set(local, faces)
                 rep_items.append(item)
                 if it.get("color") is not None or it.get("style"):
                     st = self.get_style(it.get("color") if it.get("color") is not None else (0.8, 0.8, 0.8, 1), it.get("style"))
@@ -404,7 +478,7 @@ class _Writer:
                     q = ifcopenshell.api.pset.add_qto(f, product=product, name=str(pname))
                     ifcopenshell.api.pset.edit_qto(f, qto=q, properties={
                         k: (v if isinstance(v, ifcopenshell.entity_instance) else float(v)) for k, v in props.items()})
-                else:
+                elif not self._fast_pset(product, str(pname), props):
                     p = ifcopenshell.api.pset.add_pset(f, product=product, name=str(pname))
                     ifcopenshell.api.pset.edit_pset(f, pset=p, properties=props)
             except Exception as ex:

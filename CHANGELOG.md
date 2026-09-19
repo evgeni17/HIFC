@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.3.0 — 2026-09-20
+Performance (measured on a 49 MB IFC2X3 model: 3,569 elements, 260k triangles, Houdini 22, Apple Silicon):
+* Import, Polygons output: 49 s -> 1.1 s. Elements are built once as packed primitives and unpacked in C++
+  (property dictionaries used to be written onto every triangle).
+* Import, repeat open of an unchanged file (new session too): 7.1 s -> 0.9 s with the new **Disk Cache**
+  (`$HOUDINI_TEMP_DIR/hifc_cache`, button *Clear Disk Cache*).
+* Import: property sets are read ~1.7x faster (index access, type property sets cached);
+  new **Property Sets** filter (e.g. `Pset_* Qto_*`, `* ^ArchiCADProperties`).
+* Export: 35 s -> 12.5 s. Triangle-only elements are written as `IfcTriangulatedFaceSet`, property sets are
+  created without per-call API overhead, dictionaries are read once per element, polygon vertices are read
+  in one buffer (new `PREP` node inside the export HDA). New **Property Sets to Export** filter.
+* `tests/perf_bench.py`: stage-by-stage benchmark to run in a separate `hython`.
+
 ## 0.2.0 — 2026-09-20
 Fixes from the independent test report (HIFC-test-v01):
 * **Transparency:** opaque elements no longer become fully transparent after a packed import -> export chain

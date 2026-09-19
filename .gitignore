@@ -13,3 +13,4 @@ backup/
 *.hip
 *.hiplc
 *.hipnc
+tests/big/

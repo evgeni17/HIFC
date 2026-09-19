@@ -9,7 +9,7 @@ import os
 import platform
 import sys
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 # корень плагина: .../HIFC  (этот файл: .../HIFC/python3.13libs/hifc/__init__.py)
 ROOT = os.environ.get("HIFC") or os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))

@@ -77,7 +77,15 @@ python tests/roundtrip.py
 
 See [tests/README.md](tests/README.md) for the reference results.
 
-## Limitations (0.2)
+## Performance tips
+
+* Keep **Disk Cache** on: re-opening an unchanged IFC takes about a second.
+* Read only the property sets you need (**Property Sets**, e.g. `Pset_* Qto_*`): properties are the slowest part of import.
+* Use **Packed** output for large models; switch to Polygons only when you need to edit faces.
+* On export, drop vendor property sets you do not need (**Property Sets to Export**, e.g. `* ^ArchiCADProperties`).
+* Measure your own files: `hython tests/perf_bench.py model.ifc report.json`.
+
+## Limitations (0.3)
 
 * Geometry is exported as meshes (`IfcPolygonalFaceSet`). There are no parametric extrusions or profiles yet.
 * Type objects (`IfcTypeProduct`), openings and host/opening relations are not written;

@@ -30,9 +30,10 @@ def _ev(node, name, default):
 
 def _source_geo(node):
     """Геометрия для экспорта: внутренний Unpack (раскрывает packed), иначе вход."""
-    inner = node.node("UNPACK")
-    if inner is not None:
-        return inner.geometry()
+    for name in ("PREP", "UNPACK"):
+        inner = node.node(name)
+        if inner is not None:
+            return inner.geometry()
     if node.inputs() and node.inputs()[0] is not None:
         return node.inputs()[0].geometry()
     return node.geometry()
@@ -67,6 +68,23 @@ def _prim_values(geo, name):
     return [tuple(v[i:i + size]) for i in range(0, len(v), size)]
 
 
+class _LazyPrimValues:
+    """Значение prim-атрибута по номеру примитива без чтения всех примитивов (для dict-атрибутов)."""
+
+    def __init__(self, geo, name):
+        self.geo, self.name, self.cache = geo, name, {}
+
+    def __getitem__(self, i):
+        v = self.cache.get(i)
+        if v is None and i not in self.cache:
+            v = self.cache[i] = self.geo.prim(i).attribValue(self.name)
+        return v
+
+
+def _lazy(geo, name):
+    return _LazyPrimValues(geo, name) if name and geo.findPrimAttrib(name) is not None else None
+
+
 def _class_rules(node):
     """Правила из мультипарма: (маска, класс, PredefinedType)."""
     rules = []
@@ -87,8 +105,44 @@ def _match_rule(rules, leaf, full):
     return None, None
 
 
+PREP_VEX = """// HIFC: номера точек/примитивов вершин для быстрого экспорта (читаются одним буфером)
+int pr = vertexprim(0, @vtxnum);
+i@__hifc_p = @ptnum;
+i@__hifc_pr = pr;
+i@__hifc_vi = vertexprimindex(0, @vtxnum);
+i@__hifc_poly = primintrinsic(0, "typename", pr) == "Poly";
+"""
+
+
 def _prim_point_lists(geo):
-    """Списки номеров точек для каждого примитива (только полигоны)."""
+    """Списки номеров точек для каждого примитива (только полигоны).
+
+    Быстрый путь: вершинные атрибуты от ноды PREP внутри HDA (VEX, C++) читаются одним буфером
+    и раскладываются numpy. Если их нет (старые HDA) — поштучный обход в Python.
+    """
+    if geo.findVertexAttrib("__hifc_p") is not None:
+        try:
+            return _prim_point_lists_fast(geo)
+        except Exception:
+            pass
+    return _prim_point_lists_slow(geo)
+
+
+def _prim_point_lists_fast(geo):
+    rd = lambda n: np.frombuffer(geo.vertexIntAttribValuesAsString(n), dtype=np.int32)
+    pt, pr, vi, poly_v = rd("__hifc_p"), rd("__hifc_pr"), rd("__hifc_vi"), rd("__hifc_poly")
+    npr = geo.intrinsicValue("primitivecount")
+    poly = np.zeros(npr, dtype=bool)
+    poly[pr[poly_v == 1]] = True
+    order = np.lexsort((vi, pr))
+    pt, pr = pt[order], pr[order]
+    counts = np.bincount(pr, minlength=npr)
+    offs = np.concatenate([[0], np.cumsum(counts)])
+    pl = pt.tolist()
+    return [pl[offs[i]:offs[i + 1]] if poly[i] else None for i in range(npr)]
+
+
+def _prim_point_lists_slow(geo):
     out = []
     for p in geo.iterPrims():
         if p.type() == hou.primType.Polygon:
@@ -144,9 +198,21 @@ def collect_elements(node, geo, log=None):
     pset_vals = {n: _prim_values(geo, n) for n in pset_attrs}
     add_path_prop = bool(_ev(node, "pathprop", 1))
     dict_attr = _ev(node, "dictattrib", "ifc_psets")
-    dict_vals = _prim_values(geo, dict_attr) if dict_attr and geo.findPrimAttrib(dict_attr) else None
+    dict_vals = _lazy(geo, dict_attr)
+    pset_globs = [p for p in re.split(r"[\s,;]+", _ev(node, "psetexport", "*")) if p]
+    ok_cache = {}
+
+    def _pset_ok(name):
+        # фильтр наборов свойств на экспорт (маски через пробел, ^маска — исключить)
+        v = ok_cache.get(name)
+        if v is None:
+            inc = [p for p in pset_globs if not p.startswith("^")] or ["*"]
+            exc = [p[1:] for p in pset_globs if p.startswith("^")]
+            v = ok_cache[name] = (any(fnmatch.fnmatchcase(name, p) for p in inc)
+                                  and not any(fnmatch.fnmatchcase(name, p) for p in exc))
+        return v
     meas_attr = _ev(node, "measuresattrib", "ifc_measures")
-    meas_vals = _prim_values(geo, meas_attr) if meas_attr and geo.findPrimAttrib(meas_attr) else None
+    meas_vals = _lazy(geo, meas_attr)
     mats_attr = _ev(node, "materialsattrib", "ifc_materials")
     mats_prims = geo.prims() if mats_attr and geo.findPrimAttrib(mats_attr) else None
 
@@ -210,7 +276,7 @@ def collect_elements(node, geo, log=None):
         psets = {}
         if dict_vals is not None and isinstance(dict_vals[i0], dict):
             for pn, props in dict_vals[i0].items():
-                if isinstance(props, dict):
+                if isinstance(props, dict) and _pset_ok(pn):
                     psets[pn] = dict(props)
         props = {}
         for n in pset_attrs:
@@ -351,7 +417,7 @@ def check_attributes(node, geo=None):
     guid_v, mat_v = s("guidattrib", "ifc_guid"), s("materialattrib", "ifc_material")
     rules = _class_rules(node)
     dict_attr = _ev(node, "dictattrib", "ifc_psets")
-    dict_vals = _prim_values(geo, dict_attr) if dict_attr and geo.findPrimAttrib(dict_attr) else None
+    dict_vals = _lazy(geo, dict_attr)
 
     groups = {}
     nonpoly = 0

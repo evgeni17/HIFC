@@ -35,7 +35,12 @@ def _import_ptg():
                                     script_callback_language=hou.scriptLanguage.Python, join_with_next=True))
     g.append(hou.ButtonParmTemplate("info", "File Info", script_callback="import hifc.sop_import as m; m.info_text(kwargs)",
                                     script_callback_language=hou.scriptLanguage.Python))
-    g.append(_menu("output", "Output", [("packed", "Packed Primitive per Element"), ("polys", "Polygons")]))
+    g.append(_menu("output", "Output", [("packed", "Packed Primitive per Element"), ("polys", "Polygons"),
+                                        ("auto", "Auto (instance repeated geometry)")], default=2))
+    g.append(hou.IntParmTemplate("mincopies", "Instance From N Copies", 1, default_value=(2,), min=2, max=50,
+                                 help="How many identical elements (same IFC geometry) are needed to store the "
+                                      "geometry once and place copies with the IFC transform.",
+                                 conditionals={hou.parmCondType.HideWhen: "{ output == 1 }"}))
     g.append(_menu("pathmode", "Path", [("elements", "From First Assembly (round-trip)"), ("full", "Full (Project/Site/...)")]))
     f = hou.FolderParmTemplate("filter", "Filter", folder_type=hou.folderType.Simple)
     f.addParmTemplate(hou.StringParmTemplate("include", "Include Classes", 1, default_value=("",),

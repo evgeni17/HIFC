@@ -11,7 +11,10 @@
         "psets":      {"Pset": {"prop": value}},   # длины/площади/объёмы — в СИ (м, м², м³)
         "measures":   {"Pset": {"prop": "LENGTH"|"AREA"|"VOLUME"}},  # какие значения пересчитаны в СИ
         "materials":  [имена IfcMaterial],
-        "verts":      ndarray(N,3) — метры, мировые координаты IFC (Z вверх),
+        "verts":      ndarray(N,3) — метры, ЛОКАЛЬНЫЕ координаты элемента (IFC, Z вверх),
+        "matrix":     ndarray(4,4) — размещение элемента в мире (метры),
+        "geom_id":    идентификатор геометрии IfcOpenShell: одинаковый у повторяющихся элементов
+                      (окна, двери, мебель) — по нему делается инстансинг,
         "faces":      ndarray(M,3) — треугольники (CCW),
         "face_style": ndarray(M)   — индекс в styles (-1 = без стиля),
         "styles":     [(name, (r, g, b, a))],
@@ -320,7 +323,9 @@ def iter_ifc(filepath, include=None, exclude=DEFAULT_EXCLUDE, path_mode="element
     """
     f = ifcopenshell.open(filepath)
     settings = ifcopenshell.geom.settings()
-    settings.set("use-world-coords", True)
+    # локальные координаты + матрица: так у повторяющейся геометрии совпадает geometry.id
+    # и её можно один раз положить в память, а элементы расставить копиями
+    settings.set("use-world-coords", False)
     settings.set("weld-vertices", True)
     settings.set("apply-default-materials", True)
     try:
@@ -388,6 +393,8 @@ def iter_ifc(filepath, include=None, exclude=DEFAULT_EXCLUDE, path_mode="element
             "measures": {},
             "materials": [],
             "verts": us.get_vertices(g).copy(),
+            "matrix": us.get_shape_matrix(shape),
+            "geom_id": g.id,
             "faces": us.get_faces(g).copy(),
             "face_style": us.get_faces_material_style_ids(g).copy(),
             "styles": styles,
@@ -442,6 +449,15 @@ def file_info(filepath):
         "storeys": [s.Name for s in f.by_type("IfcBuildingStorey")],
         "size_mb": round(os.path.getsize(filepath) / 1e6, 2),
     }
+
+
+def world_verts(rec):
+    """Мировые координаты элемента (метры, IFC-оси)."""
+    m = rec.get("matrix")
+    v = rec["verts"]
+    if m is None or not len(v):
+        return v
+    return v @ np.asarray(m[:3, :3]).T + np.asarray(m[:3, 3])
 
 
 def read_ifc(filepath, **kw):

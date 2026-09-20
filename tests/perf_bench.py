@@ -20,7 +20,7 @@ import hou
 
 P = sys.argv[1]
 OUT = sys.argv[2] if len(sys.argv) > 2 else os.path.join(tempfile.gettempdir(), "hifc_perf.json")
-STAGES = sys.argv[3:] or ["core", "packed", "polys", "export"]
+STAGES = sys.argv[3:] or ["core", "auto", "packed", "polys", "export"]
 res = {"file": P, "size_mb": round(os.path.getsize(P) / 1e6, 1), "stages": {}}
 
 
@@ -67,6 +67,37 @@ if "core" in STAGES:
         recs = list(r.iter_ifc(P))
         return {"elements": len(recs), "triangles": int(sum(len(x["faces"]) for x in recs))}
     stage("core_read", core)
+
+if "auto" in STAGES:
+    def auto():
+        imp.parm("output").set(2)
+        imp.cook(force=True)
+        g = imp.geometry()
+        packed = [pr for pr in g.prims() if pr.type() == hou.primType.PackedGeometry]
+        names = list(packed[0].intrinsicNames()) if packed else []
+        key = next((k for k in ("geometryid", "packedprimitivename") if k in names), None)
+        uniq, stored, shown = {}, 0, 0
+        for pr in packed:
+            e = pr.getEmbeddedGeometry()
+            n = len(e.prims())
+            shown += n
+            k = pr.intrinsicValue(key) if key else id(e)
+            if k not in uniq:
+                uniq[k] = n
+                stored += n
+        return {"prims": len(g.prims()), "packed": len(packed), "uniq_key": key,
+                "unique_geometries": len(uniq), "triangles_stored": stored,
+                "triangles_shown": shown, "errors": imp.errors()}
+    stage("hda_auto_cook", auto)
+
+if "auto" in STAGES:
+    def auto_warm():
+        imp.parm("output").set(1)
+        imp.cook(force=True)
+        imp.parm("output").set(2)
+        imp.cook(force=True)
+        return {"prims": len(imp.geometry().prims())}
+    stage("hda_auto_cook_warm_cache", auto_warm)
 
 if "packed" in STAGES:
     def packed():

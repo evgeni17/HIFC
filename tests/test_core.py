@@ -51,7 +51,7 @@ def main():
         recs, _ = ifc_read.read_ifc(src)
         # писатель без measures пишет «как есть» в метрах; ридер сообщает виды величин
         els = [{"path": r["path"], "ifc_class": r["ifc_class"], "psets": r["psets"], "measures": r["measures"],
-                "items": [{"verts": r["verts"], "faces": r["faces"].tolist()}]} for r in recs]
+                "items": [{"verts": ifc_read.world_verts(r), "faces": r["faces"].tolist()}]} for r in recs]
         dst = os.path.join(TMP, "mm_%s.ifc" % schema)
         ifc_write.write_ifc(els, dst, {"schema": schema, "length_unit": "mm"})
         g = ifcopenshell.open(dst)

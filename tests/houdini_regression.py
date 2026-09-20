@@ -76,6 +76,8 @@ def first(node, attr):
 
 def main():
     import hifc.sop_export as se
+    import hifc.sop_import as si
+    si.clear_disk_cache()
     obj = hou.node("/obj")
     old = obj.node("__hifc_regression")
     if old:
@@ -97,6 +99,10 @@ def main():
             for mode, mname in ((0, "packed"), (1, "polys")):
                 tag = "%s_%s" % (schema, mname)
                 i1 = load(net, f1, tag, mode)
+                g1 = i1.geometry()
+                yes, no = ("ifc_packed", "ifc_polygons") if mode == 0 else ("ifc_polygons", "ifc_packed")
+                check(g1.findPrimGroup(yes) is not None and g1.findPrimGroup(no) is None,
+                      tag + " primitive group %s (and only it)" % yes)
                 check(first(i1, "ifc_description") == "Description must survive", tag + " import keeps description")
                 mats = first(i1, "ifc_materials")
                 check(mats is not None and sorted(mats) == ["Glass", "Wood, oak"], tag + " import keeps materials list: %r" % (mats,))
@@ -145,6 +151,32 @@ def main():
             a0, a1 = alpha_by_guid(ref), alpha_by_guid(back)
             bad = [gid for gid in a0 if a0[gid] != a1.get(gid)]
             check(not bad, "alpha per element identical (%d elements, %d differ)" % (len(a0), len(bad)))
+
+        big = os.path.join(os.path.dirname(HERE), "tests", "big", "schependomlaan.ifc")
+        if os.path.exists(big):
+            print("== instancing of repeated geometry (Auto)")
+            a = load(net, big, "big_auto", 2)
+            p = load(net, big, "big_polys", 1)
+            ga, gp = a.geometry(), p.geometry()
+            packed = [pr for pr in ga.prims() if pr.type() == hou.primType.PackedGeometry]
+            bb = lambda g: [round(x, 3) for x in list(g.boundingBox().minvec()) + list(g.boundingBox().maxvec())]
+            check(len(packed) > 0, "auto mode produced %d packed instances of %d prims" % (len(packed), len(ga.prims())))
+            grp_p, grp_g = ga.findPrimGroup("ifc_packed"), ga.findPrimGroup("ifc_polygons")
+            check(grp_p is not None and grp_g is not None, "auto mode has both primitive groups")
+            if grp_p is not None and grp_g is not None:
+                np_, ng = len(grp_p.prims()), len(grp_g.prims())
+                check(np_ == len(packed) and np_ + ng == len(ga.prims()),
+                      "groups split the geometry: ifc_packed=%d, ifc_polygons=%d, total=%d" % (np_, ng, len(ga.prims())))
+                check(all(pr.type() == hou.primType.PackedGeometry for pr in grp_p.prims()),
+                      "ifc_packed holds only packed primitives")
+            check(bb(ga) == bb(gp), "auto vs polygons bounding box: %s / %s" % (bb(ga), bb(gp)))
+            guids_a = {pr.attribValue("ifc_guid") for pr in ga.prims()}
+            guids_p = {pr.attribValue("ifc_guid") for pr in gp.prims()}
+            check(guids_a == guids_p, "same elements in both modes (%d / %d)" % (len(guids_a), len(guids_p)))
+            f3, rep3 = export(net, a, "big_auto_export", "IFC4")
+            check("Validation: OK" in rep3, "export of instanced import is valid")
+            back3 = load(net, f3, "big_back", 1)
+            check(bb(back3.geometry()) == bb(gp), "bounding box after export of instances: %s" % bb(back3.geometry()))
 
         print("== Check Attributes rejects non-element classes")
         bw = net.createNode("attribwrangle", "badclass")

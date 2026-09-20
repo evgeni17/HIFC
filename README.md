@@ -4,7 +4,7 @@ HIFC adds IFC import and export to SideFX Houdini as two SOP nodes. It uses
 [IfcOpenShell](https://github.com/IfcOpenShell/IfcOpenShell), the same engine behind the
 Bonsai add-on for Blender, and does not need Blender.
 
-* **HIFC IFC Import** reads IFC2X3, IFC4 and IFC4X3. You get one packed primitive per element (or plain polygons), with
+* **HIFC IFC Import** reads IFC2X3, IFC4 and IFC4X3. Repeated geometry is instanced, elements can also be packed primitives or plain polygons, with
   `path`, GUID, class, storey, material, colour and all property sets as attributes.
 * **HIFC IFC Export** writes polygons to IFC. Primitive attributes set the BIM structure (hierarchy, classes,
   storeys, materials, property sets). GlobalIds stay the same between exports.
@@ -81,11 +81,15 @@ See [tests/README.md](tests/README.md) for the reference results.
 
 * Keep **Disk Cache** on: re-opening an unchanged IFC takes about a second.
 * Read only the property sets you need (**Property Sets**, e.g. `Pset_* Qto_*`): properties are the slowest part of import.
-* Use **Packed** output for large models; switch to Polygons only when you need to edit faces.
+* Leave **Output** on **Auto**: repeated geometry (identical windows, doors, furniture) is stored once and placed
+  as packed copies using the IFC transforms, the rest stays plain polygons. **Packed Primitive per Element**
+  gives the smallest scene but a heavier viewport; **Polygons** is for editing faces.
+* The import output carries two primitive groups, `ifc_packed` and `ifc_polygons`, so you can split
+  instances from the rest of the model with a single Blast.
 * On export, drop vendor property sets you do not need (**Property Sets to Export**, e.g. `* ^ArchiCADProperties`).
 * Measure your own files: `hython tests/perf_bench.py model.ifc report.json`.
 
-## Limitations (0.3)
+## Limitations (0.4)
 
 * Geometry is exported as meshes (`IfcPolygonalFaceSet`). There are no parametric extrusions or profiles yet.
 * Type objects (`IfcTypeProduct`), openings and host/opening relations are not written;

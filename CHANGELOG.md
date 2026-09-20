@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.4.0 — 2026-09-21
+* **Instancing of repeated geometry.** IFC stores repeated objects (identical windows, doors, furniture) as one
+  geometry plus a placement matrix per occurrence (`IfcRepresentationMap` / `IfcMappedItem`, `IfcLocalPlacement`).
+  The importer now keeps that: such geometry is created once and placed as packed copies, so no transforms have to
+  be guessed. New **Output: Auto (instance repeated geometry)** — now the default — packs only the repeated
+  geometry and leaves everything else as plain polygons, because packing every element slows the viewport down
+  instead of speeding it up. **Instance From N Copies** sets the threshold (default 2).
+  Measured on the 49 MB test model (3,569 elements, 260k triangles): 246 elements share 58 geometries,
+  45,896 triangles displayed from 15,949 stored, 260,091 primitives in the scene drop to 214,441 (-18%),
+  same cook time as Polygons (0.9 s). The gain scales with how much a model repeats.
+* Import writes two primitive groups: `ifc_packed` (packed copies of repeated geometry) and `ifc_polygons`
+  (plain polygons), so instances can be separated from the rest with one Blast.
+* The importer reads geometry in local coordinates and keeps the IFC placement matrix (`matrix`, `geom_id` in the
+  element record, `ifc_read.world_verts()` for world coordinates).
+* Disk cache: the key now carries a record-format number, so a cache written by an older version can no longer
+  return records without the new fields.
+* New `tests/mem_bench.py` (memory and time of one import mode in a separate process); `tests/perf_bench.py` gained
+  the `auto` stage; `tests/houdini_regression.py` checks instancing against the Polygons output and a re-export.
+
 ## 0.3.0 — 2026-09-20
 Performance (measured on a 49 MB IFC2X3 model: 3,569 elements, 260k triangles, Houdini 22, Apple Silicon):
 * Import, Polygons output: 49 s -> 1.1 s. Elements are built once as packed primitives and unpacked in C++

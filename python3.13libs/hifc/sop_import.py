@@ -20,6 +20,8 @@ ensure_vendor_path()
 # кэш прочитанных файлов: ключ -> список записей (переживает перекуки)
 _CACHE = {}
 _CACHE_MAX = 3
+# формат записей элемента: менять при изменении состава rec (иначе старый кэш отдаст записи без новых полей)
+_REC_FORMAT = 2
 
 
 def _owner(node):
@@ -64,7 +66,7 @@ def _load(path, include, exclude, path_mode, psets, threads, pset_names=None, di
     from . import __version__, ifc_read
 
     st = os.stat(path)
-    key = (__version__, path, st.st_mtime, st.st_size, tuple(include), tuple(exclude), path_mode, psets,
+    key = (__version__, _REC_FORMAT, path, st.st_mtime, st.st_size, tuple(include), tuple(exclude), path_mode, psets,
            tuple(pset_names or ()))
     recs = _CACHE.get(key)
     if recs is None and disk_cache:
@@ -185,6 +187,10 @@ def _flat_name(pset, prop):
     return ("_" + s) if s[:1].isdigit() else s
 
 
+# группы примитивов на выходе импорта
+GROUP_PACKED = "ifc_packed"
+GROUP_POLYS = "ifc_polygons"
+
 REC_STR_ATTRS = (
     ("path", "path"), ("ifc_guid", "guid"), ("ifc_class", "ifc_class"), ("ifc_predefined", "predefined"),
     ("ifc_name", "name"), ("ifc_storey", "storey"), ("ifc_type", "type_name"),
@@ -214,7 +220,7 @@ def cook(node):
     include = _classes(_ev(owner, "include", ""))
     exclude = _classes(_ev(owner, "exclude", "IfcOpeningElement IfcSpace IfcVirtualElement"))
     path_mode = "full" if _ev(owner, "pathmode", 0) == 1 else "elements"
-    packed = _ev(owner, "output", 0) == 0
+    mode = int(_ev(owner, "output", 0))  # 0 packed, 1 polygons, 2 auto
     y_up = bool(_ev(owner, "yup", 1))
     scale = float(_ev(owner, "scale", 1.0))
     want_psets = bool(_ev(owner, "psets", 1))
@@ -226,32 +232,49 @@ def cook(node):
     if pset_names == ["*"]:
         pset_names = None
     disk_cache = bool(_ev(owner, "diskcache", 1))
+    min_copies = max(2, int(_ev(owner, "mincopies", 2)))
     recs = _load(path, include, exclude, path_mode, want_psets, threads, pset_names, disk_cache)
 
-    # элементы и их атрибуты пишем один раз на packed-примитив; режим Polygons — это Unpack,
-    # который копирует атрибуты в C++ (раньше словари писались по одному на каждый треугольник)
-    pk = geo if packed else hou.Geometry()
-    _cook_packed(pk, recs, y_up, scale, want_color)
+    # повторяющаяся геометрия (одинаковый geom_id от IfcOpenShell: окна, двери, мебель)
+    counts = {}
+    for r in recs:
+        gid = r.get("geom_id")
+        counts[gid] = counts.get(gid, 0) + 1
+    instanced = {gid for gid, c in counts.items() if gid is not None and c >= min_copies}
 
-    for attr, key in REC_STR_ATTRS:
-        _prim_string_attr(pk, attr, [r[key] for r in recs])
-    _prim_int_attr(pk, "ifc_id", [r["id"] for r in recs])
-    # один материал -> s@ifc_material; полный список (наборы материалов) -> s[]@ifc_materials
-    _prim_string_attr(pk, "ifc_material", [r["materials"][0] if len(r["materials"]) == 1 else "" for r in recs])
-    if any(len(r["materials"]) > 1 for r in recs):
-        _prim_string_array_attr(pk, "ifc_materials", [r["materials"] for r in recs])
-    if want_psets:
-        _prim_dict_attr(pk, "ifc_psets", [r["psets"] for r in recs])
-        # какие свойства — длины/площади/объёмы в СИ (нужно экспорту для пересчёта единиц)
-        _prim_dict_attr(pk, "ifc_measures", [r.get("measures") or {} for r in recs])
-        if flatten:
-            _flatten_psets(pk, recs, lambda v: v)
+    if mode == 2:      # Auto: копии — packed-инстансы, остальное — обычные полигоны
+        groups = [([r for r in recs if r.get("geom_id") not in instanced], True),
+                  ([r for r in recs if r.get("geom_id") in instanced], False)]
+    elif mode == 1:    # Polygons
+        groups, instanced = [(recs, True)], set()
+    else:              # Packed
+        groups = [(recs, False)]
 
-    if not packed:
-        verb = hou.sopNodeTypeCategory().nodeVerbs()["unpack"]
-        # цвет packed-примитива (первая грань) не должен затирать цвета граней внутри
-        verb.setParms({"transfer_attributes": "* ^Cd ^Alpha ^ifc_style"})
-        verb.execute(geo, [pk])
+    unpack = hou.sopNodeTypeCategory().nodeVerbs()["unpack"]
+    # цвет packed-примитива (первая грань) не должен затирать цвета граней внутри;
+    # группы переносим, чтобы ifc_polygons дошла до распакованных треугольников
+    unpack.setParms({"transfer_attributes": "* ^Cd ^Alpha ^ifc_style", "transfer_groups": "*"})
+    single = len([g for g in groups if g[0]]) == 1
+    n_inst = 0
+    for part, to_polys in groups:
+        if not part:
+            continue
+        direct = single and not to_polys
+        pk = geo if direct else hou.Geometry()
+        _cook_packed(pk, part, y_up, scale, want_color, instanced)
+        _set_element_attribs(pk, part, want_psets, flatten)
+        # группы примитивов: быстро отделить инстансы от обычной геометрии
+        pk.createPrimGroup(GROUP_POLYS if to_polys else GROUP_PACKED).add(pk.prims())
+        if to_polys:
+            if single:
+                unpack.execute(geo, [pk])
+            else:
+                tmp = hou.Geometry()
+                unpack.execute(tmp, [pk])
+                geo.merge(tmp)
+        elif not direct:
+            geo.merge(pk)
+            n_inst += len(part)
 
     # сводка в detail-атрибутах
     geo.addAttrib(hou.attribType.Global, "ifc_file", "")
@@ -274,26 +297,84 @@ def _flatten_psets(geo, recs, rep):
             _prim_string_attr(geo, name, rep(["" if vals.get(i) is None else str(vals.get(i)) for i in range(len(recs))]))
 
 
-def _cook_packed(geo, recs, y_up, scale, want_color):
-    """Один packed-примитив на элемент (как объект Blender у Bonsai); pivot — центр bbox."""
+def _set_element_attribs(pk, recs, want_psets, flatten):
+    """Атрибуты элементов — по одному значению на packed-примитив."""
+    for attr, key in REC_STR_ATTRS:
+        _prim_string_attr(pk, attr, [r[key] for r in recs])
+    _prim_int_attr(pk, "ifc_id", [r["id"] for r in recs])
+    # один материал -> s@ifc_material; полный список (наборы материалов) -> s[]@ifc_materials
+    _prim_string_attr(pk, "ifc_material", [r["materials"][0] if len(r["materials"]) == 1 else "" for r in recs])
+    if any(len(r["materials"]) > 1 for r in recs):
+        _prim_string_array_attr(pk, "ifc_materials", [r["materials"] for r in recs])
+    if want_psets:
+        _prim_dict_attr(pk, "ifc_psets", [r["psets"] for r in recs])
+        # какие свойства — длины/площади/объёмы в СИ (нужно экспорту для пересчёта единиц)
+        _prim_dict_attr(pk, "ifc_measures", [r.get("measures") or {} for r in recs])
+        if flatten:
+            _flatten_psets(pk, recs, lambda v: v)
+
+
+def _element_geo(r, y_up, scale, want_color, local=False):
+    """Геометрия одного элемента как отдельный hou.Geometry (+ цвет первой грани)."""
+    from . import ifc_read
+    v = _to_houdini(r["verts"] if local else ifc_read.world_verts(r), y_up, scale)
+    sub = hou.Geometry()
+    center = np.zeros(3) if local or not len(v) else (v.min(axis=0) + v.max(axis=0)) * 0.5
+    _build_mesh(sub, v - center, r["faces"])
+    first = np.array([0.8, 0.8, 0.8], dtype=np.float32)
+    if want_color and len(r["faces"]):
+        c = _face_colors(r)
+        _prim_float_attr(sub, "Cd", c[:, :3], 3)
+        # Alpha пишем всегда (по умолчанию 1): иначе при Unpack/Merge непрозрачные элементы получают 0
+        _prim_float_attr(sub, "Alpha", c[:, 3], default=1.0)
+        _prim_string_attr(sub, "ifc_style", _face_style_names(r))
+        first = c[0, :3]
+    return sub, center, first
+
+
+def _hou_placement(matrix, y_up, scale):
+    """Матрица размещения IFC -> (3x3 для packed-примитива, положение точки) в осях Houdini."""
+    C = np.array([[1.0, 0, 0], [0, 0, 1.0], [0, -1.0, 0]]) if y_up else np.eye(3)
+    m = np.asarray(matrix, dtype=np.float64)
+    A = C @ m[:3, :3] @ np.linalg.inv(C)
+    b = scale * (C @ m[:3, 3])
+    return A, b
+
+
+def _set_packed_transform(prim, A):
+    """3x3 трансформация packed-примитива (положение задаёт точка)."""
+    t = tuple(float(x) for x in A.T.reshape(9))  # Houdini: строки — это столбцы матрицы
+    try:
+        prim.setIntrinsicValue("transform", t)
+    except Exception:
+        prim.setTransform(hou.Matrix4([[t[0], t[1], t[2], 0], [t[3], t[4], t[5], 0],
+                                       [t[6], t[7], t[8], 0], [0, 0, 0, 1]]))
+
+
+def _cook_packed(geo, recs, y_up, scale, want_color, instanced=None):
+    """Packed-примитив на элемент. Для geom_id из instanced геометрия создаётся один раз
+    и ставится копиями по матрице из IFC (экономия памяти и быстрый вьюпорт)."""
     first_colors = []
+    shared = {}
     for r in recs:
-        v = _to_houdini(r["verts"], y_up, scale)
-        sub = hou.Geometry()
-        center = (v.min(axis=0) + v.max(axis=0)) * 0.5 if len(v) else np.zeros(3)
-        _build_mesh(sub, v - center, r["faces"])
-        if want_color and len(r["faces"]):
-            c = _face_colors(r)
-            _prim_float_attr(sub, "Cd", c[:, :3], 3)
-            # Alpha пишем всегда (по умолчанию 1): иначе при Unpack/Merge непрозрачные элементы получают 0
-            _prim_float_attr(sub, "Alpha", c[:, 3], default=1.0)
-            _prim_string_attr(sub, "ifc_style", _face_style_names(r))
-            first_colors.append(c[0, :3])
+        gid = r.get("geom_id")
+        if instanced and gid in instanced:
+            cached = shared.get(gid)
+            if cached is None:
+                sub, _, first = _element_geo(r, y_up, scale, want_color, local=True)
+                cached = shared[gid] = (sub.freeze(True), first)
+            frozen, first = cached
+            A, b = _hou_placement(r["matrix"], y_up, scale)
+            pt = geo.createPoint()
+            pt.setPosition(hou.Vector3(*[float(x) for x in b]))
+            prim = geo.createPackedGeometry(frozen, pt)
+            _set_packed_transform(prim, A)
         else:
-            first_colors.append(np.array([0.8, 0.8, 0.8], dtype=np.float32))
-        pt = geo.createPoint()
-        pt.setPosition(center.tolist())
-        geo.createPackedGeometry(sub.freeze(True), pt)
+            sub, center, first = _element_geo(r, y_up, scale, want_color)
+            pt = geo.createPoint()
+            pt.setPosition([float(x) for x in center])
+            geo.createPackedGeometry(sub.freeze(True), pt)
+        first_colors.append(first)
     if want_color and first_colors:
         _prim_float_attr(geo, "Cd", np.array(first_colors), 3)
 

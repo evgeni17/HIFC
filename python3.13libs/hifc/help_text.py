@@ -231,7 +231,9 @@ HELP_IMPORT_RU = u"""= HIFC IFC Import =
 IFC File:
     Файл IFC2X3 / IFC4 / IFC4X3.
 Output:
-    Packed Primitive per Element — как объекты в Bonsai; Polygons — плоская сетка.
+    *Auto* (по умолчанию) — повторяющаяся геометрия (одинаковые окна, двери, мебель) кладётся в память один раз и расставляется packed-копиями по матрицам из IFC, остальное становится обычными полигонами: и память, и вьюпорт остаются лёгкими. *Packed Primitive per Element* — каждый элемент отдельным packed-примитивом (как объекты в Bonsai). *Polygons* — всё плоской сеткой.
+Instance From N Copies:
+    Сколько одинаковых элементов должно быть, чтобы геометрия хранилась один раз (по умолчанию 2).
 Path:
     "From First Assembly" — путь от первой сборки (для обратного экспорта); "Full" — от IfcProject.
 Include / Exclude Classes:
@@ -245,6 +247,9 @@ Disk Cache:
 
 `path`, `ifc_guid`, `ifc_class`, `ifc_predefined`, `ifc_name`, `ifc_tag`, `ifc_object_type`, `ifc_description`,
 `ifc_storey`, `ifc_type`, `ifc_material`, `s[]@ifc_materials`, `ifc_style`, `ifc_id`, `d@ifc_psets`, `d@ifc_measures`, `Cd`, `Alpha`.
+
+Группы примитивов: `ifc_packed` — packed-копии повторяющейся геометрии, `ifc_polygons` — обычные полигоны.
+Одним Blast или Delete по группе можно отделить инстансы от остальной модели.
 """
 
 
@@ -476,7 +481,9 @@ The output carries the same attributes that HIFC IFC Export understands, so impo
 IFC File:
     IFC2X3 / IFC4 / IFC4X3 file.
 Output:
-    Packed Primitive per Element (like objects in Bonsai) or Polygons (flat mesh).
+    *Auto* (default) — geometry that repeats in the model (identical windows, doors, furniture) is stored once and placed as packed copies using the transforms from IFC, everything else becomes plain polygons: both memory and the viewport stay light. *Packed Primitive per Element* — one packed primitive per element (like objects in Bonsai). *Polygons* — one flat mesh.
+Instance From N Copies:
+    How many identical elements it takes before their geometry is stored once (default 2).
 Path:
     "From First Assembly" gives paths from the first assembly (for re-export); "Full" starts at IfcProject.
 Include / Exclude Classes:
@@ -490,6 +497,9 @@ Disk Cache:
 
 `path`, `ifc_guid`, `ifc_class`, `ifc_predefined`, `ifc_name`, `ifc_tag`, `ifc_object_type`, `ifc_description`,
 `ifc_storey`, `ifc_type`, `ifc_material`, `s[]@ifc_materials`, `ifc_style`, `ifc_id`, `d@ifc_psets`, `d@ifc_measures`, `Cd`, `Alpha`.
+
+Primitive groups: `ifc_packed` — packed copies of repeated geometry, `ifc_polygons` — plain polygons.
+One Blast or Delete on a group separates the instances from the rest of the model.
 """
 
 

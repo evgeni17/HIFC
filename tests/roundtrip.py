@@ -40,13 +40,14 @@ def to_elements(recs):
         # части геометрии по стилям граней: сохраняем распределение цветов, а не только первый
         items = []
         fs = r["face_style"]
+        wv = ifc_read.world_verts(r)
         for sid in sorted(set(fs.tolist())):
             faces = r["faces"][fs == sid]
             used = np.unique(faces)
             remap = {int(p): i for i, p in enumerate(used)}
             col = r["styles"][sid][1] if 0 <= sid < len(r["styles"]) else None
             name = r["styles"][sid][0] if 0 <= sid < len(r["styles"]) else None
-            items.append({"verts": r["verts"][used], "faces": [[remap[int(i)] for i in f] for f in faces],
+            items.append({"verts": wv[used], "faces": [[remap[int(i)] for i in f] for f in faces],
                           "color": col, "style": name or None})
         els.append({
             "path": r["path"], "ifc_class": r["ifc_class"], "predefined": r["predefined"],
@@ -85,7 +86,7 @@ def _colors(r):
 
 
 def _bbox(r):
-    v = r["verts"]
+    v = ifc_read.world_verts(r)
     return np.concatenate([v.min(0), v.max(0)]) if len(v) else np.zeros(6)
 
 

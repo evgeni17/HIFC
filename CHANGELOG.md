@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.4.1 — 2026-09-21
+Fixes from the second independent test report (HIFC-test-v02) and the stricter tests it asked for:
+* **Units of an overridden property.** If an occurrence overrode a property of its type with a dimensionless
+  value while another property of the same set stayed measured, the fast property reader kept the inherited
+  LENGTH/AREA/VOLUME mark: `IfcReal(7)` came back as `IfcLengthMeasure(7000)` in a millimetre project.
+  Marks inherited from the type are now dropped for every property the occurrence overrides. The bug came in
+  with the fast reader in 0.3.0; the reference reader was right all along, and the two are now compared by a test.
+* **Complex and table properties are no longer dropped in silence.** `IfcComplexProperty` is imported flattened
+  (`Nested.Child`); `IfcPropertyTableValue`, `IfcPropertyReferenceValue` and the like are counted and reported
+  through a new warning channel — a node warning plus the `ifc_warnings` detail attribute, also shown by
+  **File Info**. The supported set of property types is now written out in the node help and the README.
+* **Round-trip comparison hardened** — it used to pass things it should not have:
+  element sets are compared both ways (extra and duplicated elements are errors now), colours are compared as
+  the area each colour covers (a swap between faces no longer passes) over unique faces, measure marks are
+  compared as well as values, and a class may only be replaced by a proxy when the writer's own rule says so
+  (`downgrade_reason`) — the blanket "schemas differ, so anything goes" exemption is gone.
+  `tests/test_core.py` now contains negative tests: every one of those mutations must fail the comparison.
+  All 35 certification files still pass in both `auto`/mm and `IFC2X3`/cm under the strict rules.
+* On a class downgrade the element's own ObjectType is kept; the original class goes into ObjectType only when
+  the element has none.
+* `world_verts()` uses `einsum`: on macOS/arm64 the BLAS path raised spurious divide-by-zero and overflow flags
+  on ordinary rotation matrices. Verified bit-identical results.
+
 ## 0.4.0 — 2026-09-21
 * **Instancing of repeated geometry.** IFC stores repeated objects (identical windows, doors, furniture) as one
   geometry plus a placement matrix per occurrence (`IfcRepresentationMap` / `IfcMappedItem`, `IfcLocalPlacement`).

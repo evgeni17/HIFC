@@ -250,6 +250,17 @@ Disk Cache:
 
 Группы примитивов: `ifc_packed` — packed-копии повторяющейся геометрии, `ifc_polygons` — обычные полигоны.
 Одним Blast или Delete по группе можно отделить инстансы от остальной модели.
+
+@properties Что переносится из свойств IFC
+
+Переносятся: `IfcPropertySingleValue`, `IfcPropertyEnumeratedValue`, `IfcPropertyListValue`,
+`IfcPropertyBoundedValue` (как `нижняя..верхняя`) и величины из `IfcElementQuantity`.
+`IfcComplexProperty` разворачивается в плоские имена: свойство `Child` внутри `Nested` становится `Nested.Child`
+(при экспорте оно так и запишется — обычным свойством с точкой в имени, вложенность не восстанавливается).
+
+Не переносятся: `IfcPropertyTableValue`, `IfcPropertyReferenceValue` и другие типы, у которых значение —
+таблица или ссылка, а не одно число. Такие свойства остаются в исходном файле и при экспорте не пишутся;
+нода сообщает о них предупреждением и записывает его в детальный атрибут `ifc_warnings`.
 """
 
 
@@ -500,6 +511,17 @@ Disk Cache:
 
 Primitive groups: `ifc_packed` — packed copies of repeated geometry, `ifc_polygons` — plain polygons.
 One Blast or Delete on a group separates the instances from the rest of the model.
+
+@properties Which IFC properties are imported
+
+Imported: `IfcPropertySingleValue`, `IfcPropertyEnumeratedValue`, `IfcPropertyListValue`,
+`IfcPropertyBoundedValue` (as `lower..upper`) and the quantities of `IfcElementQuantity`.
+`IfcComplexProperty` is flattened: a property `Child` inside `Nested` becomes `Nested.Child`
+(export writes it back with that name as an ordinary property; the nesting is not restored).
+
+Not imported: `IfcPropertyTableValue`, `IfcPropertyReferenceValue` and other types whose value is a table or a
+reference rather than a single value. They stay in the source file and are not written on export; the node
+reports them with a warning and stores it in the `ifc_warnings` detail attribute.
 """
 
 

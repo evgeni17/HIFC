@@ -31,6 +31,12 @@ Blender не нужен.
 * **Property Sets** — читайте только нужные наборы (`Pset_* Qto_*`, `* ^ArchiCADProperties`): свойства медленнее всего.
 * Замеры на своих файлах: `hython tests/perf_bench.py model.ifc report.json`.
 
+## Свойства
+
+Переносятся одиночные, перечислимые и списочные значения, диапазоны и величины `IfcElementQuantity`.
+`IfcComplexProperty` разворачивается в `Родитель.Потомок`. Табличные и ссылочные свойства не переносятся —
+нода сообщает о них предупреждением и пишет его в детальный атрибут `ifc_warnings`.
+
 ## Тестирование
 
 Тестовые файлы — официальные [Certification datasets](https://github.com/buildingSMART/Certification-datasets)

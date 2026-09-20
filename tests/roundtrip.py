@@ -28,7 +28,7 @@ import ifcopenshell.validate  # noqa: E402
 
 BBOX_TOL = 1e-5      # м
 VALUE_RTOL = 1e-6    # относительная точность чисел в свойствах
-COLOR_TOL = 1e-3
+AREA_RTOL = 1e-3     # относительная точность площадей при сравнении раскладки цветов
 
 
 def to_elements(recs):
@@ -66,7 +66,8 @@ def _num_equal(a, b):
     return str(a) == str(b)
 
 
-def _psets_diff(a, b):
+def _psets_diff(a, b, ma, mb):
+    """Расхождения свойств в обе стороны, включая пометки измеряемых величин."""
     diffs = []
     for pn, props in a.items():
         pb = b.get(pn)
@@ -76,13 +77,60 @@ def _psets_diff(a, b):
         for k, v in props.items():
             if k not in pb:
                 diffs.append("%s.%s missing" % (pn, k))
-            elif not _num_equal(v, pb[k]):
+                continue
+            if not _num_equal(v, pb[k]):
                 diffs.append("%s.%s: %r -> %r" % (pn, k, v, pb[k]))
+            ka = (ma.get(pn) or {}).get(k)
+            kb = (mb.get(pn) or {}).get(k)
+            if ka != kb:
+                diffs.append("%s.%s measure %s -> %s" % (pn, k, ka, kb))
+    for pn, props in b.items():
+        if pn not in a:
+            diffs.append("extra set %s" % pn)
+            continue
+        for k in props:
+            if k not in a[pn]:
+                diffs.append("%s.%s extra" % (pn, k))
     return diffs
 
 
-def _colors(r):
-    return sorted(tuple(round(float(x), 3) for x in c) for _, c in r["styles"] if c is not None)
+def _tri_areas(v, faces):
+    p0, p1, p2 = v[faces[:, 0]], v[faces[:, 1]], v[faces[:, 2]]
+    return 0.5 * np.linalg.norm(np.cross(p1 - p0, p2 - p0), axis=1)
+
+
+def _color_areas(r):
+    """Площадь граней по цветам. В отличие от палитры ловит перестановку цветов между гранями."""
+    v = ifc_read.world_verts(r)
+    faces = r["faces"]
+    if not len(faces) or not len(v):
+        return {}
+    areas = _tri_areas(v, faces)
+    fs = r["face_style"]
+    rv = np.round(v, 6)
+    seen, out = set(), {}
+    for i, t in enumerate(faces.tolist()):
+        key = tuple(sorted(tuple(rv[j]) for j in t))
+        if key in seen:
+            continue       # повторяющиеся грани (двусторонние поверхности) считаем один раз
+        seen.add(key)
+        sid = int(fs[i])
+        col = r["styles"][sid][1] if 0 <= sid < len(r["styles"]) else None
+        ck = tuple(round(float(x), 3) for x in col) if col is not None else None
+        out[ck] = out.get(ck, 0.0) + float(areas[i])
+    return out
+
+
+def _colors_diff(a, b):
+    ca, cb = _color_areas(a), _color_areas(b)
+    total = sum(ca.values()) or 1.0
+    tol = AREA_RTOL * total
+    if set(ca) != set(cb):
+        return "colors: %r -> %r" % (sorted(ca), sorted(cb))
+    for k, v in ca.items():
+        if abs(v - cb[k]) > tol:
+            return "colour %r covers %.4g m2 instead of %.4g m2" % (k, cb[k], v)
+    return None
 
 
 def _bbox(r):
@@ -90,12 +138,54 @@ def _bbox(r):
     return np.concatenate([v.min(0), v.max(0)]) if len(v) else np.zeros(6)
 
 
+def _pdt_required(schema, cls):
+    """PredefinedType обязателен для класса в этой схеме (в IFC2X3 их много)."""
+    import ifcopenshell.ifcopenshell_wrapper as w
+    try:
+        decl = w.schema_by_name(schema).declaration_by_name(cls)
+        for i, at in enumerate(decl.all_attributes()):
+            if at.name() == "PredefinedType":
+                return not decl.attribute_by_index(i).optional()
+    except Exception:
+        pass
+    return False
+
+
+def _pdt_values(schema, cls):
+    """Допустимые значения PredefinedType класса в схеме (пусто, если у класса его нет)."""
+    import ifcopenshell.ifcopenshell_wrapper as w
+    try:
+        decl = w.schema_by_name(schema).declaration_by_name(cls)
+    except Exception:
+        return ()
+    while decl is not None:
+        for at in getattr(decl, "attributes", lambda: [])():
+            if at.name() != "PredefinedType":
+                continue
+            t = at.type_of_attribute()
+            for _ in range(4):
+                t = getattr(t, "declared_type", lambda: None)() or t
+                if hasattr(t, "enumeration_items"):
+                    return tuple(t.enumeration_items())
+        decl = getattr(decl, "supertype", lambda: None)()
+    return ()
+
+
 def expected(field, a, b, schema_out):
-    """Известные преобразования HIFC 0.2 (задокументированы в README)."""
+    """Известные преобразования HIFC. Разрешается только то, что подтверждается целевой схемой."""
     cls_a = a["ifc_class"]
-    downgraded = b["ifc_class"] == "IfcBuildingElementProxy" and cls_a != "IfcBuildingElementProxy"
-    if downgraded and field in ("ifc_class", "predefined", "object_type"):
-        return "class downgraded (%s)" % cls_a
+    if field in ("ifc_class", "predefined", "object_type"):
+        reason = ifc_write.downgrade_reason(schema_out, cls_a)
+        proxy = b["ifc_class"] == "IfcBuildingElementProxy" and cls_a != "IfcBuildingElementProxy"
+        if proxy and reason:
+            # причину берём у самого writer: любая другая замена класса — ошибка
+            return "class %s -> proxy (%s)" % (cls_a, reason)
+        if field == "predefined" and not a["predefined"] and b["predefined"] == "NOTDEFINED" \
+                and _pdt_required(schema_out, b["ifc_class"]):
+            return "PredefinedType required in %s -> NOTDEFINED" % schema_out
+        if field == "predefined" and a["predefined"] and a["predefined"] not in _pdt_values(schema_out, b["ifc_class"]):
+            return "PredefinedType %s not in %s" % (a["predefined"], schema_out)
+        return None
     if field == "name" and not a["name"]:
         return "empty name -> path leaf"
     if field == "storey" and a["storey_class"] != "IfcBuildingStorey":
@@ -104,11 +194,19 @@ def expected(field, a, b, schema_out):
 
 
 def compare(recs_a, recs_b, schema_out):
-    ib = {r["guid"]: r for r in recs_b}
+    """Расхождения между входом и выходом. Сравнение симметричное: лишние элементы тоже ошибка."""
+    src = [r for r in recs_a if len(r["faces"])]
     unexpected, known = [], {}
-    for a in recs_a:
-        if not len(a["faces"]):
+    ib = {}
+    for r in recs_b:
+        if not len(r["faces"]):
             continue
+        if r["guid"] in ib:
+            unexpected.append((r["guid"], "duplicate element in output"))
+        ib[r["guid"]] = r
+    for g in sorted(set(ib) - {r["guid"] for r in src}):
+        unexpected.append((g, "extra element in output (%s)" % ib[g]["ifc_class"]))
+    for a in src:
         b = ib.get(a["guid"])
         if b is None:
             unexpected.append((a["guid"], "element missing"))
@@ -122,11 +220,11 @@ def compare(recs_a, recs_b, schema_out):
                     unexpected.append((a["guid"], "%s: %r -> %r" % (field, a[field], b[field])))
         if sorted(a["materials"]) != sorted(b["materials"]):
             unexpected.append((a["guid"], "materials: %r -> %r" % (a["materials"], b["materials"])))
-        for d in _psets_diff(a["psets"], b["psets"]):
+        for d in _psets_diff(a["psets"], b["psets"], a["measures"], b["measures"]):
             unexpected.append((a["guid"], "psets " + d))
-        ca, cb = _colors(a), _colors(b)
-        if len(ca) != len(cb) or any(max(abs(x - y) for x, y in zip(p, q)) > COLOR_TOL for p, q in zip(ca, cb)):
-            unexpected.append((a["guid"], "colors: %r -> %r" % (ca, cb)))
+        cd = _colors_diff(a, b)
+        if cd:
+            unexpected.append((a["guid"], cd))
         if np.max(np.abs(_bbox(a) - _bbox(b))) > BBOX_TOL:
             unexpected.append((a["guid"], "bbox differs by %.2e m" % np.max(np.abs(_bbox(a) - _bbox(b)))))
     return unexpected, known
@@ -158,15 +256,6 @@ def main():
         log = ifcopenshell.validate.json_logger()
         ifcopenshell.validate.validate(ifcopenshell.open(dst), log)
         unexpected, known = compare(recs, recs2, schema)
-        # классы, которых нет в целевой схеме, — ожидаемая замена (предупреждение писателя)
-        if schema != src_schema:
-            rest = []
-            for g, msg in unexpected:
-                if msg.startswith(("ifc_class:", "predefined:", "object_type:")):
-                    known["class/type not in %s" % schema] = known.get("class/type not in %s" % schema, 0) + 1
-                else:
-                    rest.append((g, msg))
-            unexpected = rest
         good = not unexpected and not log.statements
         bad_files += not good
         print("%-4s %-66s el=%-4d issues=%d unexpected=%d known=%s" % (

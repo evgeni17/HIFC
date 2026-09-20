@@ -89,13 +89,16 @@ See [tests/README.md](tests/README.md) for the reference results.
 * On export, drop vendor property sets you do not need (**Property Sets to Export**, e.g. `* ^ArchiCADProperties`).
 * Measure your own files: `hython tests/perf_bench.py model.ifc report.json`.
 
-## Limitations (0.4)
+## Limitations (0.4.1)
 
 * Geometry is exported as meshes (`IfcPolygonalFaceSet`). There are no parametric extrusions or profiles yet.
 * Type objects (`IfcTypeProduct`), openings and host/opening relations are not written;
   `IfcSurfaceFeature` is exported as a proxy.
 * Every spatial container (site, facility part, road part...) is exported as `IfcBuildingStorey`.
 * Material layers/profiles are flattened to a constituent set (names only, no thicknesses).
+* Properties: single values, enumerated and list values, bounded values and quantities are imported;
+  `IfcComplexProperty` is flattened to `Parent.Child`; table and reference properties are not imported and
+  are reported as a node warning and in the `ifc_warnings` detail attribute.
 * Georeferenced models with very large coordinates are not tested yet (Houdini stores positions in float32).
 
 ## License

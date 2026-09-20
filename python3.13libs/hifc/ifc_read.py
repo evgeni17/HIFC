@@ -139,47 +139,64 @@ def _simple_value(v):
     return v
 
 
-def _read_propdef(d, scales, out, kinds_out):
-    """Одно определение свойств (IfcPropertySet / IfcElementQuantity) -> out[name], kinds_out[name].
+def _read_props(props_list, scales, props, kinds, prefix="", skipped=None, depth=0):
+    """Список IfcProperty -> props/kinds. Вложенные IfcComplexProperty разворачиваются в «Родитель.Свойство».
 
     Доступ к атрибутам по индексам (быстрее, чем по имени): это самая горячая функция импорта.
-    IfcPropertySingleValue: 0 Name, 2 NominalValue, 3 Unit; IfcPhysicalSimpleQuantity: 0 Name, 2 Unit, 3 value.
+    IfcPropertySingleValue: 0 Name, 2 NominalValue, 3 Unit; IfcComplexProperty: 0 Name, 2 UsageName, 3 HasProperties.
     """
+    for p in props_list or ():
+        pcls = p.is_a()
+        kind = None
+        if pcls == "IfcPropertySingleValue":
+            nv = p[2]
+            if nv is None:
+                v = None
+            else:
+                v = nv.wrappedValue
+                kind = MEASURE_KIND.get(nv.is_a())
+        elif pcls == "IfcPropertyEnumeratedValue":
+            v = _simple_value(p[2])
+        elif pcls == "IfcPropertyListValue":
+            v = _simple_value(p[2])
+        elif pcls == "IfcPropertyBoundedValue":
+            v = "%s..%s" % (_simple_value(p[3]), _simple_value(p[2]))
+        elif pcls == "IfcComplexProperty":
+            if depth < MAX_PROP_DEPTH:
+                _read_props(p[3], scales, props, kinds, prefix + (p[0] or "") + ".", skipped, depth + 1)
+            elif skipped is not None:
+                skipped[pcls] = skipped.get(pcls, 0) + 1
+            continue
+        else:
+            # IfcPropertyTableValue, IfcPropertyReferenceValue и прочие структурные типы:
+            # значения у них не одно число, поэтому в атрибуты Houdini они не переносятся
+            if skipped is not None:
+                skipped[pcls] = skipped.get(pcls, 0) + 1
+            continue
+        pname = prefix + (p[0] or "")
+        if kind and isinstance(v, (int, float)) and not isinstance(v, bool):
+            unit = p[3]
+            v = float(v) * (unit_si_scale(unit) if unit is not None else scales.get(kind, 1.0))
+            kinds[pname] = kind
+        elif kinds:
+            kinds.pop(pname, None)
+        props[pname] = v
+
+
+def _read_propdef(d, scales, out, kinds_out, skipped=None):
+    """Одно определение свойств (IfcPropertySet / IfcElementQuantity) -> out[name], kinds_out[name]."""
     dcls = d.is_a()
     name = d[2] or dcls
     props, kinds = out.setdefault(name, {}), kinds_out.setdefault(name, {})
     if dcls == "IfcPropertySet":
-        for p in d[4] or ():
-            pcls = p.is_a()
-            kind = None
-            if pcls == "IfcPropertySingleValue":
-                nv = p[2]
-                if nv is None:
-                    v = None
-                else:
-                    v = nv.wrappedValue
-                    kind = MEASURE_KIND.get(nv.is_a())
-            elif pcls == "IfcPropertyEnumeratedValue":
-                v = _simple_value(p[2])
-            elif pcls == "IfcPropertyListValue":
-                v = _simple_value(p[2])
-            elif pcls == "IfcPropertyBoundedValue":
-                v = "%s..%s" % (_simple_value(p[3]), _simple_value(p[2]))
-            else:
-                continue
-            pname = p[0]
-            if kind and isinstance(v, (int, float)) and not isinstance(v, bool):
-                unit = p[3]
-                v = float(v) * (unit_si_scale(unit) if unit is not None else scales.get(kind, 1.0))
-                kinds[pname] = kind
-            elif kinds:
-                kinds.pop(pname, None)
-            props[pname] = v
-    else:  # IfcElementQuantity
+        _read_props(d[4], scales, props, kinds, "", skipped)
+    else:  # IfcElementQuantity: 0 Name, 2 Unit, 3 значение у IfcPhysicalSimpleQuantity
         for q in d[5] or ():
             qcls = q.is_a()
             kind = QUANTITY_KIND.get(qcls)
             if kind is None and not q.is_a("IfcPhysicalSimpleQuantity"):
+                if skipped is not None:
+                    skipped[qcls] = skipped.get(qcls, 0) + 1
                 continue
             v = q[3]
             if kind and isinstance(v, (int, float)):
@@ -204,6 +221,7 @@ def _defs_of(obj):
 
 
 _PSET_CLASSES = ("IfcPropertySet", "IfcElementQuantity")
+MAX_PROP_DEPTH = 4   # глубина разворачивания IfcComplexProperty
 
 
 class _PsetReader:
@@ -212,6 +230,7 @@ class _PsetReader:
     def __init__(self, scales, names=None):
         self.scales = scales
         self.type_cache = {}
+        self.skipped = {}          # тип свойства IFC -> сколько раз пропущен
         self.names = [n for n in (names or ()) if n]  # маски имён наборов; пусто = все
         self._name_ok = {}
 
@@ -231,7 +250,7 @@ class _PsetReader:
         out, kinds = {}, {}
         for d in _defs_of(obj):
             if d is not None and d.is_a() in _PSET_CLASSES and self._wanted(d[2] or ""):
-                _read_propdef(d, self.scales, out, kinds)
+                _read_propdef(d, self.scales, out, kinds, self.skipped)
         return out, kinds
 
     def read(self, e):
@@ -248,14 +267,18 @@ class _PsetReader:
         o_ps, o_ms = self._read(e)
         for k, v in o_ps.items():
             psets.setdefault(k, {}).update(v)
-            if k in o_ms:
-                measures.setdefault(k, {}).update(o_ms[k])
-            elif k in measures:
-                # свойство перекрыто экземпляром без единицы — убираем пометку для перекрытых
+            own = o_ms.get(k) or {}
+            inherited = measures.get(k)
+            if inherited:
+                # всё, что экземпляр перекрыл своим значением, теряет унаследованную пометку единиц:
+                # у типа свойство могло быть длиной, а у экземпляра — обычным числом
                 for pk in v:
-                    measures[k].pop(pk, None)
-                if not measures[k]:
-                    measures.pop(k)
+                    if pk not in own:
+                        inherited.pop(pk, None)
+            if own:
+                measures.setdefault(k, {}).update(own)
+            if k in measures and not measures[k]:
+                measures.pop(k)
         return {k: v for k, v in psets.items() if v}, measures
 
 
@@ -315,8 +338,11 @@ def _clean_psets(d):
 
 
 def iter_ifc(filepath, include=None, exclude=DEFAULT_EXCLUDE, path_mode="elements",
-             psets=True, threads=0, progress=None, pset_names=None):
+             psets=True, threads=0, progress=None, pset_names=None, stats=None):
     """Генератор элементов. include/exclude — списки имён классов IFC.
+
+    stats: словарь вызывающего; по ходу чтения в него кладётся "skipped_properties"
+    (тип свойства IFC -> сколько раз пропущен), чтобы нода могла показать предупреждение.
 
     path_mode: "elements" — путь от первой непространственной сборки (для экспорта обратно);
                "full"     — полный путь от IfcProject.
@@ -414,6 +440,8 @@ def iter_ifc(filepath, include=None, exclude=DEFAULT_EXCLUDE, path_mode="element
             if progress(n, total) is False:
                 return
         yield rec
+        if stats is not None and pset_reader.skipped:
+            stats["skipped_properties"] = dict(pset_reader.skipped)
         if not it.next():
             break
 
@@ -452,12 +480,16 @@ def file_info(filepath):
 
 
 def world_verts(rec):
-    """Мировые координаты элемента (метры, IFC-оси)."""
+    """Мировые координаты элемента (метры, IFC-оси).
+
+    einsum, а не `v @ m.T`: на macOS/arm64 путь через BLAS поднимает ложные флаги
+    divide-by-zero/overflow на совершенно нормальных матрицах поворота. Результат совпадает побитово.
+    """
     m = rec.get("matrix")
     v = rec["verts"]
     if m is None or not len(v):
         return v
-    return v @ np.asarray(m[:3, :3]).T + np.asarray(m[:3, 3])
+    return np.einsum("ij,kj->ik", v, np.asarray(m[:3, :3])) + np.asarray(m[:3, 3])
 
 
 def read_ifc(filepath, **kw):

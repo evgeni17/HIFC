@@ -178,6 +178,38 @@ def main():
             back3 = load(net, f3, "big_back", 1)
             check(bb(back3.geometry()) == bb(gp), "bounding box after export of instances: %s" % bb(back3.geometry()))
 
+        print("== unsupported properties are reported, not dropped silently")
+        import hifc
+        hifc.ensure_vendor_path()
+        import ifcopenshell
+        import hifc.ifc_write as iw
+        src = os.path.join(TMP, "table.ifc")
+        import numpy as np
+        bv = np.array([[x, y, z] for x in (0, 2.0) for y in (0, 0.2) for z in (0, 4.0)], float)
+        bf = [[0, 2, 3, 1], [4, 5, 7, 6], [0, 1, 5, 4], [2, 6, 7, 3], [0, 4, 6, 2], [1, 3, 7, 5]]
+        iw.write_ifc([{"path": "/W1", "ifc_class": "IfcWall", "items": [{"verts": bv, "faces": bf}]}], src)
+        fh = ifcopenshell.open(src)
+        props = [fh.create_entity("IfcPropertyTableValue", Name="Table",
+                                  DefiningValues=[fh.create_entity("IfcReal", 1.0)],
+                                  DefinedValues=[fh.create_entity("IfcReal", 10.0)]),
+                 fh.create_entity("IfcPropertySingleValue", Name="Simple",
+                                  NominalValue=fh.create_entity("IfcText", "ok"))]
+        pset = fh.create_entity("IfcPropertySet", GlobalId=ifcopenshell.guid.new(),
+                                Name="Pset_Custom", HasProperties=props)
+        fh.create_entity("IfcRelDefinesByProperties", GlobalId=ifcopenshell.guid.new(),
+                         RelatedObjects=[fh.by_type("IfcWall")[0]], RelatingPropertyDefinition=pset)
+        fh.write(src)
+        tb = load(net, src, "table", 1)
+        gt = tb.geometry()
+        warn = gt.attribValue("ifc_warnings") if gt.findGlobalAttrib("ifc_warnings") else ""
+        check(len(gt.prims()) == 12, "geometry still built with a warning (%d prims)" % len(gt.prims()))
+        check("IfcPropertyTableValue" in warn, "table property reported in ifc_warnings: %r" % warn[:60])
+        inner = tb.node("IFC_READ")
+        check(inner is not None and any("IfcPropertyTableValue" in w for w in inner.warnings()),
+              "node warning raised")
+        check(first(tb, "ifc_psets") == {"Pset_Custom": {"Simple": "ok"}},
+              "supported property still imported: %r" % (first(tb, "ifc_psets"),))
+
         print("== Check Attributes rejects non-element classes")
         bw = net.createNode("attribwrangle", "badclass")
         bw.setInput(0, box)

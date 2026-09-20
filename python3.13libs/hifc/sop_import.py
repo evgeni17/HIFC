@@ -21,7 +21,7 @@ ensure_vendor_path()
 _CACHE = {}
 _CACHE_MAX = 3
 # формат записей элемента: менять при изменении состава rec (иначе старый кэш отдаст записи без новых полей)
-_REC_FORMAT = 2
+_REC_FORMAT = 3
 
 
 def _owner(node):
@@ -61,42 +61,47 @@ def _cache_file(key):
 
 
 def _load(path, include, exclude, path_mode, psets, threads, pset_names=None, disk_cache=True):
-    """Записи элементов: кэш в памяти -> дисковый кэш ($HOUDINI_TEMP_DIR/hifc_cache) -> чтение IFC."""
+    """(записи элементов, сводка чтения): кэш в памяти -> дисковый кэш -> чтение IFC.
+
+    Сводка (stats) кэшируется вместе с записями, иначе после кэша пропадали бы предупреждения.
+    """
     import pickle
     from . import __version__, ifc_read
 
     st = os.stat(path)
     key = (__version__, _REC_FORMAT, path, st.st_mtime, st.st_size, tuple(include), tuple(exclude), path_mode, psets,
            tuple(pset_names or ()))
-    recs = _CACHE.get(key)
-    if recs is None and disk_cache:
+    cached = _CACHE.get(key)
+    if cached is None and disk_cache:
         cf = _cache_file(key)
         if os.path.exists(cf):
             try:
                 with open(cf, "rb") as fh:
-                    recs = pickle.load(fh)
+                    cached = pickle.load(fh)
             except Exception:
-                recs = None
-    if recs is None:
+                cached = None
+    if cached is None:
+        stats = {}
         with hou.InterruptableOperation("HIFC: reading IFC", open_interrupt_dialog=True) as op:
             def progress(i, n):
                 op.updateProgress(min(1.0, float(i) / max(1, n)))
             recs = ifc_read.uniquify_paths(list(ifc_read.iter_ifc(
                 path, include=include or None, exclude=exclude, path_mode=path_mode,
-                psets=psets, threads=threads, progress=progress, pset_names=pset_names)))
+                psets=psets, threads=threads, progress=progress, pset_names=pset_names, stats=stats)))
+        cached = (recs, stats)
         if disk_cache:
             try:
                 cf = _cache_file(key)
                 os.makedirs(os.path.dirname(cf), exist_ok=True)
                 with open(cf + ".tmp", "wb") as fh:
-                    pickle.dump(recs, fh, protocol=pickle.HIGHEST_PROTOCOL)
+                    pickle.dump(cached, fh, protocol=pickle.HIGHEST_PROTOCOL)
                 os.replace(cf + ".tmp", cf)
             except Exception:
                 pass
     if len(_CACHE) >= _CACHE_MAX and key not in _CACHE:
         _CACHE.pop(next(iter(_CACHE)))
-    _CACHE[key] = recs
-    return recs
+    _CACHE[key] = cached
+    return cached
 
 
 def clear_disk_cache(kwargs=None):
@@ -233,7 +238,7 @@ def cook(node):
         pset_names = None
     disk_cache = bool(_ev(owner, "diskcache", 1))
     min_copies = max(2, int(_ev(owner, "mincopies", 2)))
-    recs = _load(path, include, exclude, path_mode, want_psets, threads, pset_names, disk_cache)
+    recs, stats = _load(path, include, exclude, path_mode, want_psets, threads, pset_names, disk_cache)
 
     # повторяющаяся геометрия (одинаковый geom_id от IfcOpenShell: окна, двери, мебель)
     counts = {}
@@ -281,6 +286,23 @@ def cook(node):
     geo.setGlobalAttribValue("ifc_file", path)
     geo.addAttrib(hou.attribType.Global, "ifc_elements", 0)
     geo.setGlobalAttribValue("ifc_elements", len(recs))
+    warn = warning_text(stats)
+    geo.addAttrib(hou.attribType.Global, "ifc_warnings", "")
+    if warn:
+        geo.setGlobalAttribValue("ifc_warnings", warn)
+        # предупреждение ноды: геометрия уже построена, кук на этом заканчивается
+        raise hou.NodeWarning(warn)
+
+
+def warning_text(stats):
+    """Текст предупреждения о том, что при чтении не перенеслось в атрибуты."""
+    sk = (stats or {}).get("skipped_properties") or {}
+    if not sk:
+        return ""
+    items = ", ".join("%s x%d" % kv for kv in sorted(sk.items()))
+    return ("Some IFC properties are not imported as attributes: %s. "
+            "These property types hold tables or references, not a single value; "
+            "they stay in the source file and are not written back on export." % items)
 
 
 def _flatten_psets(geo, recs, rep):
@@ -387,6 +409,10 @@ def info_text(kwargs):
     try:
         i = ifc_read.file_info(path)
         msg = json.dumps(i, indent=2, ensure_ascii=False)
+        g = node.geometry() if node.geometry() is not None else None
+        w = g.attribValue("ifc_warnings") if (g is not None and g.findGlobalAttrib("ifc_warnings")) else ""
+        if w:
+            msg += "\n\nWarnings:\n" + w
     except Exception as ex:
         msg = "Error: %s" % ex
     hou.ui.displayMessage(msg, title="HIFC: IFC info")

@@ -15,7 +15,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(HERE), "python3.13libs"))
 
 from hifc import ifc_read, ifc_write  # noqa: E402
 
+import copy  # noqa: E402
+
 import ifcopenshell  # noqa: E402
+import ifcopenshell.api as api  # noqa: E402
 import ifcopenshell.util.element as ue  # noqa: E402
 import ifcopenshell.util.unit as uu  # noqa: E402
 
@@ -96,6 +99,82 @@ def main():
     r = ifc_read.read_ifc(dst)[0][0]
     cols = sorted(tuple(round(x, 3) for x in c) for _, c in r["styles"])
     check(cols == [(0.0, 0.0, 1.0, 1.0), (1.0, 0.0, 0.0, 0.4)], "two styles kept: %r" % cols)
+
+    print("6. Property overridden by the occurrence loses the inherited unit mark")
+    src = os.path.join(TMP, "override.ifc")
+    f = ifcopenshell.file(schema="IFC4")
+    api.run("root.create_entity", f, ifc_class="IfcProject", name="P")
+    api.run("unit.assign_unit", f, length={"is_metric": True, "raw": "MILLIMETERS"})
+    w = api.run("root.create_entity", f, ifc_class="IfcWall", name="W")
+    wt = api.run("root.create_entity", f, ifc_class="IfcWallType", name="WT")
+    api.run("type.assign_type", f, related_objects=[w], relating_type=wt)
+    for owner, props in ((wt, {"A": f.create_entity("IfcLengthMeasure", 2000.0),
+                               "B": f.create_entity("IfcLengthMeasure", 3000.0)}),
+                         (w, {"A": f.create_entity("IfcReal", 7.0),
+                              "B": f.create_entity("IfcLengthMeasure", 4000.0)})):
+        ps = api.run("pset.add_pset", f, product=owner, name="Pset_Custom")
+        api.run("pset.edit_pset", f, pset=ps, properties=props)
+    f.write(src)
+    ps, ms = ifc_read._PsetReader(ifc_read._project_scales(f)).read(w)
+    check(ms.get("Pset_Custom") == {"B": "LENGTH"},
+          "only the measured property keeps its mark: %r" % (ms.get("Pset_Custom"),))
+    check(abs(ps["Pset_Custom"]["A"] - 7.0) < 1e-9 and abs(ps["Pset_Custom"]["B"] - 4.0) < 1e-9,
+          "values in SI: %r" % (ps["Pset_Custom"],))
+    check(ifc_read._element_psets_slow(f, w, ifc_read._project_scales(f))[1] == ms, "fast reader matches the slow one")
+    dst = os.path.join(TMP, "override_out.ifc")
+    ifc_write.write_ifc([wall(psets=ps, measures=ms)], dst, {"schema": "IFC4", "length_unit": "mm"})
+    g = ifcopenshell.open(dst)
+    types = {p.Name: (p.NominalValue.is_a(), p.NominalValue.wrappedValue)
+             for p in g.by_type("IfcPropertySingleValue")}
+    check(types["A"][0] != "IfcLengthMeasure" and abs(types["A"][1] - 7.0) < 1e-9,
+          "dimensionless A exported as %s(%s)" % types["A"])
+    check(types["B"][0] == "IfcLengthMeasure" and abs(types["B"][1] - 4000.0) < 1e-6,
+          "length B exported as %s(%s)" % types["B"])
+
+    print("7. Complex and table properties: flattened or reported, never silently dropped")
+    f = ifcopenshell.file(schema="IFC4")
+    api.run("root.create_entity", f, ifc_class="IfcProject", name="P")
+    api.run("unit.assign_unit", f, length={"is_metric": True, "raw": "MILLIMETERS"})
+    w = api.run("root.create_entity", f, ifc_class="IfcWall", name="W")
+    child = f.create_entity("IfcPropertySingleValue", Name="Child", NominalValue=f.create_entity("IfcReal", 5.0))
+    props = [f.create_entity("IfcPropertySingleValue", Name="Simple", NominalValue=f.create_entity("IfcText", "ok")),
+             f.create_entity("IfcComplexProperty", Name="Nested", UsageName="Group", HasProperties=[child]),
+             f.create_entity("IfcPropertyTableValue", Name="Table",
+                             DefiningValues=[f.create_entity("IfcReal", 1.0)],
+                             DefinedValues=[f.create_entity("IfcReal", 10.0)])]
+    ps_ent = f.create_entity("IfcPropertySet", GlobalId=ifcopenshell.guid.new(), Name="Pset_Custom", HasProperties=props)
+    f.create_entity("IfcRelDefinesByProperties", GlobalId=ifcopenshell.guid.new(),
+                    RelatedObjects=[w], RelatingPropertyDefinition=ps_ent)
+    rd = ifc_read._PsetReader(ifc_read._project_scales(f))
+    ps, _ = rd.read(w)
+    check(ps["Pset_Custom"].get("Nested.Child") == 5.0, "complex property read as Nested.Child: %r" % (ps["Pset_Custom"],))
+    check(rd.skipped.get("IfcPropertyTableValue") == 1, "table property counted as skipped: %r" % (rd.skipped,))
+
+    print("8. Negative tests: the round-trip comparison must catch these")
+    sys.path.insert(0, HERE)
+    import roundtrip as rt
+    src = os.path.join(TMP, "neg.ifc")
+    v, fc = box()
+    items = [{"verts": v, "faces": fc[:3], "color": (0, 0, 1, 1)}, {"verts": v, "faces": fc[3:], "color": (1, 0, 0, 1)}]
+    ifc_write.write_ifc([wall(items=items, psets={"Qto_WallBaseQuantities": {"Length": 2.0}},
+                              measures={"Qto_WallBaseQuantities": {"Length": "LENGTH"}}),
+                         wall(path="/W2", guid=None, items=[{"verts": v + 5.0, "faces": fc}])], src)
+    base, _ = ifc_read.read_ifc(src)
+    check(not rt.compare(base, copy.deepcopy(base), "IFC4")[0], "identical models compare equal")
+
+    def mutate(name, fn):
+        b = copy.deepcopy(base)
+        fn(b)
+        bad = rt.compare(base, b, "IFC4")[0]
+        check(bool(bad), "%s is reported (%s)" % (name, bad[0][1] if bad else "MISSED"))
+
+    mutate("colours swapped between faces", lambda b: b[0].__setitem__("face_style", b[0]["face_style"][::-1].copy()))
+    mutate("duplicated element", lambda b: b.append(copy.deepcopy(b[0])))
+    mutate("extra element", lambda b: b.append(dict(copy.deepcopy(b[0]), guid="0extraGUID0extraGUID00")))
+    mutate("missing element", lambda b: b.pop())
+    mutate("class silently replaced by proxy", lambda b: b[0].__setitem__("ifc_class", "IfcBuildingElementProxy"))
+    mutate("unit mark lost", lambda b: b[0]["measures"]["Qto_WallBaseQuantities"].pop("Length"))
+    mutate("property value changed", lambda b: b[0]["psets"]["Qto_WallBaseQuantities"].__setitem__("Length", 2.5))
 
     print("\n%s (%d failures). Files: %s" % ("PASSED" if not FAILS else "FAILED", len(FAILS), TMP))
     return 1 if FAILS else 0

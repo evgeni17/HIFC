@@ -114,6 +114,30 @@ def class_status(schema_identifier, cls):
     return "ok"
 
 
+def _is_feature_element(schema_identifier, cls):
+    """IfcFeatureElement (проёмы, поверхностные элементы) требует связи с хостом."""
+    import ifcopenshell.ifcopenshell_wrapper as w
+    try:
+        decl = w.schema_by_name(schema_identifier).declaration_by_name(cls)
+        while decl is not None:
+            if decl.name() == "IfcFeatureElement":
+                return True
+            decl = decl.supertype()
+    except Exception:
+        pass
+    return False
+
+
+def downgrade_reason(schema_identifier, cls):
+    """Почему класс не может быть записан как есть (для writer и тестов). '' — может."""
+    st = class_status(schema_identifier, cls)
+    if st != "ok":
+        return STATUS_TEXT[st]
+    if _is_feature_element(schema_identifier, cls):
+        return "needs a host element"
+    return ""
+
+
 def _split_path(path):
     return [s for s in str(path or "").replace("\\", "/").split("/") if s]
 
@@ -234,7 +258,9 @@ class _Writer:
                         object_type = pt
                 except Exception:
                     pass
-        if orig_cls != cls and hasattr(e, "ObjectType"):
+        if orig_cls != cls and hasattr(e, "ObjectType") and not object_type:
+            # исходный класс сохраняем в ObjectType, только если своего у элемента нет —
+            # данные пользователя важнее подсказки о замене класса
             object_type = orig_cls
         if object_type and hasattr(e, "ObjectType"):
             e.ObjectType = object_type
@@ -242,15 +268,7 @@ class _Writer:
         return e
 
     def _needs_host(self, cls):
-        try:
-            decl = ifcopenshell.ifcopenshell_wrapper.schema_by_name(self.f.schema_identifier).declaration_by_name(cls)
-            while decl is not None:
-                if decl.name() == "IfcFeatureElement":
-                    return True
-                decl = decl.supertype()
-        except Exception:
-            pass
-        return False
+        return _is_feature_element(self.f.schema_identifier, cls)
 
     def _fill_required_enums(self, e):
         """Обязательные enum-атрибуты (напр. IfcRoadPart.UsageType) -> NOTDEFINED."""

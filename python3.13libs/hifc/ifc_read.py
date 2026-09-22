@@ -341,13 +341,19 @@ def iter_ifc(filepath, include=None, exclude=DEFAULT_EXCLUDE, path_mode="element
              psets=True, threads=0, progress=None, pset_names=None, stats=None):
     """Генератор элементов. include/exclude — списки имён классов IFC.
 
-    stats: словарь вызывающего; по ходу чтения в него кладётся "skipped_properties"
-    (тип свойства IFC -> сколько раз пропущен), чтобы нода могла показать предупреждение.
+    stats: словарь вызывающего; в него кладутся "context" (file_context: геопривязка, площадки, здания)
+    и "skipped_properties" (тип свойства IFC -> сколько раз пропущен) для предупреждения ноды.
 
     path_mode: "elements" — путь от первой непространственной сборки (для экспорта обратно);
                "full"     — полный путь от IfcProject.
     """
     f = ifcopenshell.open(filepath)
+    if stats is not None:
+        # верхние уровни (геопривязка, площадки, здания) — дёшево, читаем один раз вместе с элементами
+        try:
+            stats["context"] = file_context(f)
+        except Exception as ex:
+            stats["context_error"] = "%s: %s" % (type(ex).__name__, ex)
     settings = ifcopenshell.geom.settings()
     # локальные координаты + матрица: так у повторяющейся геометрии совпадает geometry.id
     # и её можно один раз положить в память, а элементы расставить копиями
@@ -465,11 +471,244 @@ def uniquify_paths(records):
                 r["path"] = "%s_%s" % (p, sfx)
     return records
 
+# ---------------------------------------------------------------- контекст файла (верхние уровни)
+
+_FACILITY_CLASSES = ("IfcFacility", "IfcBuilding")   # IFC4X3: мосты, дороги, ж/д, здания; раньше — только здания
+
+
+def _dms_to_deg(v):
+    """IfcCompoundPlaneAngleMeasure (градусы, минуты, секунды, миллионные) -> десятичные градусы."""
+    if not v:
+        return None
+    parts = list(v) + [0] * (4 - len(v))
+    d, m, sec, mil = (float(x) for x in parts[:4])
+    sign = -1.0 if any(x < 0 for x in (d, m, sec, mil)) else 1.0
+    return sign * (abs(d) + abs(m) / 60.0 + (abs(sec) + abs(mil) / 1e6) / 3600.0)
+
+
+def _entity_values(e, skip=()):
+    """Простые атрибуты сущности (числа и строки) — для записи «как есть»."""
+    out = {}
+    for k, v in e.get_info(recursive=False).items():
+        if k in ("id", "type") or k in skip:
+            continue
+        if isinstance(v, bool) or isinstance(v, (int, float, str)):
+            out[k] = v
+    return out
+
+
+def _unit_name(u):
+    if u is None:
+        return ""
+    if u.is_a("IfcSIUnit"):
+        return ((u.Prefix or "") + " " + u.Name).strip().lower()
+    return getattr(u, "Name", "") or u.is_a()
+
+
+def _unit_m(u):
+    """Сколько метров в единице длины (IfcSIUnit или IfcConversionBasedUnit)."""
+    try:
+        if u.is_a("IfcSIUnit"):
+            return ifcopenshell.util.unit.get_prefix_multiplier(u.Prefix) if u.Prefix else 1.0
+        if u.is_a("IfcConversionBasedUnit"):
+            cf = u.ConversionFactor
+            return float(cf.ValueComponent.wrappedValue) * _unit_m(cf.UnitComponent)
+    except Exception:
+        pass
+    return 1.0
+
+
+def _address(a):
+    if a is None:
+        return {}
+    out = {}
+    for k in ("Purpose", "Description", "UserDefinedPurpose", "InternalLocation", "PostalBox", "Town", "Region",
+              "PostalCode", "Country"):
+        v = getattr(a, k, None)
+        if v:
+            out[k] = v
+    lines = getattr(a, "AddressLines", None)
+    if lines:
+        out["AddressLines"] = list(lines)
+    return out
+
+
+def _placement_m(e, length_scale):
+    """Мировая матрица размещения объекта (вся цепочка PlacementRelTo), перенос — в метрах."""
+    import ifcopenshell.util.placement as up
+    if getattr(e, "ObjectPlacement", None) is None:
+        return np.eye(4)
+    m = np.array(up.get_local_placement(e.ObjectPlacement), dtype=float)
+    m[:3, 3] *= length_scale
+    return m
+
+
+def _psets_plain(e, scales):
+    rd = _PsetReader(scales)
+    return rd.read(e)
+
+
+def _georef(f, project, scales, length_scale):
+    """Геопривязка: контекст (WCS, TrueNorth), IfcMapConversion + IfcProjectedCRS или их аналоги в IFC2X3."""
+    import math
+    out = {"schema": f.schema, "length_unit_m": length_scale, "has_map_conversion": False}
+    ctx = None
+    for c in (project.RepresentationContexts or ()) if project else ():
+        if c.is_a("IfcGeometricRepresentationContext") and not c.is_a("IfcGeometricRepresentationSubContext"):
+            if ctx is None or (c.ContextType or "") == "Model":
+                ctx = c
+    if ctx is not None:
+        import ifcopenshell.util.placement as up
+        wcs = ctx.WorldCoordinateSystem
+        if wcs is not None:
+            try:
+                m = np.array(up.get_axis2placement(wcs), dtype=float)
+            except Exception:
+                m = np.eye(4)
+            m[:3, 3] *= length_scale
+            out["wcs_matrix"] = [float(x) for x in m.reshape(16)]
+        out["precision"] = float(ctx.Precision) if ctx.Precision is not None else None
+        tn = ctx.TrueNorth
+        if tn is not None:
+            x, y = (list(tn.DirectionRatios) + [0.0, 0.0])[:2]
+            out["true_north"] = [float(x), float(y)]
+            # угол от оси +Y проекта до истинного севера, против часовой стрелки
+            out["true_north_deg"] = math.degrees(math.atan2(-x, y)) + 0.0  # без «-0.0»
+        for op in getattr(ctx, "HasCoordinateOperation", None) or ():
+            mc = _entity_values(op)
+            mc["class"] = op.is_a()
+            out["map_conversion"] = mc
+            out["has_map_conversion"] = True
+            a, o = mc.get("XAxisAbscissa"), mc.get("XAxisOrdinate")
+            if a is not None and o is not None:
+                # поворот оси X проекта относительно оси восток карты, против часовой стрелки
+                out["map_rotation_deg"] = math.degrees(math.atan2(o, a)) + 0.0  # без «-0.0»
+            crs = op.TargetCRS
+            if crs is not None:
+                c = _entity_values(crs)
+                c["class"] = crs.is_a()
+                mu = getattr(crs, "MapUnit", None)
+                c["MapUnit"] = _unit_name(mu) if mu is not None else ""
+                # Eastings/Northings/OrthogonalHeight — в единицах карты; без MapUnit — в единицах длины проекта
+                c["map_unit_m"] = _unit_m(mu) if mu is not None else length_scale
+                out["crs"] = c
+                mc["map_origin_m"] = [float(mc.get(k) or 0.0) * c["map_unit_m"]
+                                      for k in ("Eastings", "Northings", "OrthogonalHeight")]
+            break
+    # IFC2X3: соглашение buildingSMART «ePSet_MapConversion / ePSet_ProjectedCRS» на проекте или площадке
+    if not out["has_map_conversion"]:
+        holders = ([project] if project else []) + list(f.by_type("IfcSite"))
+        for h in holders:
+            ps = ue.get_psets(h)
+            mc, crs = ps.get("ePSet_MapConversion"), ps.get("ePSet_ProjectedCRS")
+            if mc:
+                out["map_conversion"] = {k: v for k, v in mc.items() if k != "id"}
+                out["map_conversion"]["class"] = "ePSet_MapConversion"
+                out["has_map_conversion"] = True
+                a, o = mc.get("XAxisAbscissa"), mc.get("XAxisOrdinate")
+                if a is not None and o is not None:
+                    out["map_rotation_deg"] = math.degrees(math.atan2(o, a)) + 0.0  # без «-0.0»
+            if crs:
+                out["crs"] = {k: v for k, v in crs.items() if k != "id"}
+                out["crs"]["class"] = "ePSet_ProjectedCRS"
+            if mc:
+                # то же правило, что у IfcMapConversion: без MapUnit — единицы длины проекта
+                mu = str((crs or {}).get("MapUnit") or "").upper()
+                unit_m = next((v for k, v in (("MILLI", 0.001), ("CENTI", 0.01), ("DECI", 0.1), ("KILO", 1000.0),
+                                              ("FOOT", 0.3048), ("FEET", 0.3048), ("METRE", 1.0), ("METER", 1.0))
+                               if k in mu), length_scale)
+                out.setdefault("crs", {"class": "ePSet_ProjectedCRS"})["map_unit_m"] = unit_m
+                out["map_conversion"]["map_origin_m"] = [float(mc.get(k) or 0.0) * unit_m
+                                                         for k in ("Eastings", "Northings", "OrthogonalHeight")]
+            if mc or crs:
+                break
+    return out
+
+
+def file_context(f):
+    """Данные верхних уровней файла: геопривязка проекта, площадки и здания/сооружения.
+
+    Всё в метрах и в осях IFC (Z вверх). Матрицы — 4x4 по строкам, столбцовые векторы (как в IfcOpenShell).
+    """
+    scales = _project_scales(f)
+    length_scale = scales.get("LENGTH", 1.0)
+    proj = (f.by_type("IfcProject") or [None])[0]
+    ctx = {
+        "project": {"name": (proj.Name or "") if proj else "", "long_name": getattr(proj, "LongName", None) or "",
+                    "guid": proj.GlobalId if proj else "", "phase": getattr(proj, "Phase", None) or ""},
+        "units": {k.lower(): float(v) for k, v in scales.items()},
+        "georef": _georef(f, proj, scales, length_scale),
+        "sites": [],
+        "facilities": [],
+    }
+    for site in f.by_type("IfcSite"):
+        m = _placement_m(site, length_scale)
+        ps, ms = _psets_plain(site, scales)
+        parent = ue.get_aggregate(site)
+        ctx["sites"].append({
+            "guid": site.GlobalId, "name": site.Name or "", "long_name": site.LongName or "",
+            "description": site.Description or "", "class": site.is_a(),
+            "parent_guid": parent.GlobalId if parent is not None and hasattr(parent, "GlobalId") else "",
+            "parent_class": parent.is_a() if parent is not None else "",
+            "matrix": [float(x) for x in m.reshape(16)],
+            "latitude": _dms_to_deg(site.RefLatitude), "longitude": _dms_to_deg(site.RefLongitude),
+            "latitude_dms": list(site.RefLatitude) if site.RefLatitude else [],
+            "longitude_dms": list(site.RefLongitude) if site.RefLongitude else [],
+            "ref_elevation": float(site.RefElevation) * length_scale if site.RefElevation is not None else None,
+            "land_title_number": site.LandTitleNumber or "",
+            "address": _address(site.SiteAddress),
+            "psets": ps, "measures": ms,
+        })
+    seen = set()
+    for cls in _FACILITY_CLASSES:
+        try:
+            items = f.by_type(cls)
+        except Exception:
+            continue
+        for b in items:
+            if b.id() in seen:
+                continue
+            seen.add(b.id())
+            parent = ue.get_aggregate(b)
+            m = _placement_m(b, length_scale)
+            ps, ms = _psets_plain(b, scales)
+            ert, ete = getattr(b, "ElevationOfRefHeight", None), getattr(b, "ElevationOfTerrain", None)
+            ctx["facilities"].append({
+                "guid": b.GlobalId, "name": b.Name or "", "long_name": b.LongName or "",
+                "description": b.Description or "", "class": b.is_a(),
+                "predefined": str(getattr(b, "PredefinedType", "") or ""),
+                "parent_guid": parent.GlobalId if parent is not None and hasattr(parent, "GlobalId") else "",
+                "parent_class": parent.is_a() if parent is not None else "",
+                "matrix": [float(x) for x in m.reshape(16)],
+                "elevation_of_ref_height": float(ert) * length_scale if ert is not None else None,
+                "elevation_of_terrain": float(ete) * length_scale if ete is not None else None,
+                "address": _address(getattr(b, "BuildingAddress", None)),
+                "psets": ps, "measures": ms,
+            })
+    return ctx
+
+
+def top_placement(ctx):
+    """Самый верхний уровень размещения: корневая площадка (под IfcProject), иначе корневое здание/сооружение.
+
+    Возвращает (матрица 4x4 в метрах и осях IFC, описание источника) или (None, "").
+    Именно в размещение площадки экспорт из Revit/ArchiCAD кладёт «общие координаты» — большие сдвиги.
+    """
+    if not ctx:
+        return None, ""
+    for key in ("sites", "facilities"):
+        items = ctx.get(key) or []
+        roots = [x for x in items if x.get("parent_class") in ("", "IfcProject")]
+        for x in roots or items:
+            return (np.array(x["matrix"], dtype=np.float64).reshape(4, 4),
+                    "%s '%s' %s" % (x["class"], x["name"], x["guid"]))
+    return None, ""
+
 
 def file_info(filepath):
     f = ifcopenshell.open(filepath)
     proj = f.by_type("IfcProject")
-    return {
+    info = {
         "schema": f.schema,
         "project": (proj[0].Name if proj else "") or "",
         "unit_scale": ifcopenshell.util.unit.calculate_unit_scale(f),
@@ -477,6 +716,22 @@ def file_info(filepath):
         "storeys": [s.Name for s in f.by_type("IfcBuildingStorey")],
         "size_mb": round(os.path.getsize(filepath) / 1e6, 2),
     }
+    try:
+        c = file_context(f)
+        g = c["georef"]
+        info["georeference"] = {
+            "crs": (g.get("crs") or {}).get("Name", "") or "none",
+            "map_origin_m": (g.get("map_conversion") or {}).get("map_origin_m"),
+            "map_rotation_deg": g.get("map_rotation_deg"),
+            "true_north_deg": g.get("true_north_deg"),
+        }
+        info["sites"] = [{"name": x["name"], "origin_m": [round(x["matrix"][i], 3) for i in (3, 7, 11)],
+                          "lat_lon": [x["latitude"], x["longitude"]]} for x in c["sites"]]
+        info["facilities"] = [{"name": x["name"], "class": x["class"],
+                               "origin_m": [round(x["matrix"][i], 3) for i in (3, 7, 11)]} for x in c["facilities"]]
+    except Exception as ex:
+        info["georeference"] = "error: %s" % ex
+    return info
 
 
 def world_verts(rec):

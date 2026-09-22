@@ -210,6 +210,82 @@ def main():
         check(first(tb, "ifc_psets") == {"Pset_Custom": {"Simple": "ok"}},
               "supported property still imported: %r" % (first(tb, "ifc_psets"),))
 
+        print("== top levels in detail attributes: georeference, sites, buildings")
+        sys.path.insert(0, HERE)
+        import georef_fixture as gf
+        import hifc.sop_import as si
+        gpath = gf.make(os.path.join(TMP, "georef_IFC4.ifc"), "IFC4")
+        gn = load(net, gpath, "georef", 1)
+        gg = gn.geometry()
+        check(gg.attribValue("ifc_crs") == gf.EXPECT["crs"], "s@ifc_crs = %r" % gg.attribValue("ifc_crs"))
+        gr = gg.attribValue("ifc_georef") if gg.findGlobalAttrib("ifc_georef") else {}
+        mo = list((gr.get("map_conversion") or {}).get("map_origin_m") or [])
+        check(len(mo) == 3 and all(abs(a - b) < 1e-6 for a, b in zip(mo, gf.EXPECT["map_origin_m"])),
+              "d@ifc_georef map origin (m) = %r" % mo)
+        sites = gg.attribValue("ifc_sites") if gg.findGlobalAttrib("ifc_sites") else ()
+        facs = gg.attribValue("ifc_facilities") if gg.findGlobalAttrib("ifc_facilities") else ()
+        check(len(sites) == 1 and len(facs) == 1, "d[]@ifc_sites / d[]@ifc_facilities: %d / %d" % (len(sites), len(facs)))
+        if sites and facs:
+            sx, so = sites[0]["xform"], list(sites[0]["origin"])
+            # IFC (10, 20, 0) м -> Houdini с Y вверх: (10, 0, -20)
+            check(all(abs(a - b) < 1e-6 for a, b in zip(so, (10.0, 0.0, -20.0))), "site origin in Houdini axes = %r" % so)
+            m4 = hou.Matrix4(list(sx))
+            t = list(hou.Vector3(0, 0, 0) * m4)
+            check(all(abs(a - b) < 1e-6 for a, b in zip(t, so)), "site xform works as hou.Matrix4: %r" % t)
+            check(abs(sites[0]["latitude"] - gf.EXPECT["latitude"]) < 1e-6, "site latitude = %r" % sites[0]["latitude"])
+            fo = list(facs[0]["origin"])
+            check(all(abs(a - b) < 1e-6 for a, b in zip(fo, (13.0, 0.5, -24.0))), "building origin in Houdini axes = %r" % fo)
+            bb = gg.boundingBox()
+            # стена стоит в начале здания: её угол совпадает с началом здания в осях Houdini
+            check(abs(bb.minvec()[0] - fo[0]) < 1e-5 and abs(bb.minvec()[1] - fo[1]) < 1e-5 and abs(bb.maxvec()[2] - fo[2]) < 1e-5,
+                  "geometry and building xform agree: bbox min %r" % (list(bb.minvec()),))
+        si._CACHE.clear()
+        gn.node("IFC_READ").cook(force=True)
+        check(gn.geometry().attribValue("ifc_crs") == gf.EXPECT["crs"], "top-level data survives the disk cache")
+
+        print("== global_xform: top placement, Transform By Attribute, Move to Origin")
+
+        def xform_by(src_node, name, invert):
+            x = net.createNode("xformbyattrib", name)
+            x.setInput(0, src_node)
+            x.parm("xformattrib").set("global_xform")
+            x.parm("invertxform").set(1 if invert else 0)
+            return x
+
+        def box_of(n):
+            b = n.geometry().boundingBox()
+            return list(b.minvec()), list(b.maxvec())
+
+        near = load(net, gpath, "gx_near", 1)
+        gxa = near.geometry().findGlobalAttrib("global_xform")
+        check(gxa is not None and gxa.size() == 16 and gxa.qualifier() == "Matrix",
+              "4@global_xform exists as a matrix (%s)" % (gxa.qualifier() if gxa else None))
+        check("Site A" in near.geometry().attribValue("global_xform_source"),
+              "source = %r" % near.geometry().attribValue("global_xform_source"))
+        lo, hi = box_of(xform_by(near, "gx_near_inv", True))
+        # здание стоит в (3, 4, 0.5) от площадки -> в осях Houdini (3, 0.5, -4); стена 0.2 м по IFC Y
+        check(all(abs(a - b) < 1e-4 for a, b in zip(lo, (3.0, 0.5, -4.2))) and abs(hi[2] + 4.0) < 1e-4,
+              "Invert Transformation puts the site at the origin: bbox min %r" % (lo,))
+
+        far_path = gf.make(os.path.join(TMP, "georef_far.ifc"), "IFC4", site_origin_m=[500000.0, 5700000.0, 45.0])
+        far = load(net, far_path, "gx_far", 1)
+        lo, hi = box_of(xform_by(far, "gx_far_inv", True))
+        print("  info float32 P far away, then inverted: wall thickness %.4f m (true 0.2)" % (hi[2] - lo[2]))
+        far_o = load(net, far_path, "gx_far_origin", 1)
+        far_o.parm("toorigin").set(1)
+        lo, hi = box_of(far_o)
+        check(all(abs(a - b) < 1e-4 for a, b in zip(lo, (3.0, 0.5, -4.2))) and abs((hi[2] - lo[2]) - 0.2) < 1e-5,
+              "Move to Origin keeps the 0.2 m wall exact: bbox min %r, thickness %.6f" % (lo, hi[2] - lo[2]))
+        go = far_o.geometry()
+        check(go.attribValue("ifc_moved_to_origin") == 1, "i@ifc_moved_to_origin = 1")
+        check(list(go.attribValue("global_xform")) == list(far.geometry().attribValue("global_xform")),
+              "global_xform is the same with and without Move to Origin")
+        so = list(go.attribValue("ifc_sites")[0]["origin"])
+        check(all(abs(v) < 1e-9 for v in so), "site xform follows the moved geometry: origin %r" % so)
+        lo, hi = box_of(xform_by(far_o, "gx_far_back", False))
+        check(abs(lo[0] - 500003.0) < 1.0 and abs(lo[1] - 45.5) < 1.0 and abs(hi[2] + 5700004.0) < 1.0,
+              "Transform By Attribute without Invert puts it back: bbox min %r" % (lo,))
+
         print("== Check Attributes rejects non-element classes")
         bw = net.createNode("attribwrangle", "badclass")
         bw.setInput(0, box)

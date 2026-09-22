@@ -261,6 +261,49 @@ Disk Cache:
 Не переносятся: `IfcPropertyTableValue`, `IfcPropertyReferenceValue` и другие типы, у которых значение —
 таблица или ссылка, а не одно число. Такие свойства остаются в исходном файле и при экспорте не пишутся;
 нода сообщает о них предупреждением и записывает его в детальный атрибут `ifc_warnings`.
+
+@detail Верхние уровни файла (detail-атрибуты)
+
+Импорт кладёт в detail данные о том, где модель стоит в мире и как расставлены её площадки и здания.
+Все длины — в метрах.
+
+`s@ifc_crs`:
+    Имя системы координат карты, например `EPSG:32760`. Пусто, если у файла нет геопривязки.
+`d@ifc_georef`:
+    Геопривязка проекта: `map_conversion` (Eastings, Northings, OrthogonalHeight, XAxisAbscissa/Ordinate, Scale —
+    как в файле, плюс `map_origin_m` — сдвиг начала координат модели в метрах карты), `map_rotation_deg` —
+    поворот оси X проекта от оси «восток» карты против часовой, `crs` (имя, датум, единицы карты),
+    `true_north` и `true_north_deg`, `wcs_matrix`, `precision`, `length_unit_m`.
+    В IFC4/IFC4X3 данные берутся из `IfcMapConversion` + `IfcProjectedCRS`,
+    в IFC2X3 — из наборов `ePSet_MapConversion` / `ePSet_ProjectedCRS` (соглашение buildingSMART).
+`d@ifc_project`:
+    Имя, GUID и фаза проекта, масштабы единиц (`units`).
+`d[]@ifc_sites`:
+    Площадки: имя, GUID, `latitude`/`longitude` (десятичные градусы), `ref_elevation`, `land_title_number`,
+    `address`, `psets`, и две матрицы размещения — `ifc_matrix` (как в файле: оси IFC, Z вверх, метры)
+    и `xform` (в осях и единицах сцены, по строкам: `hou.Matrix4(site["xform"])`), `origin` — её перенос.
+`d[]@ifc_facilities`:
+    Здания и сооружения (в IFC4X3 — мосты, дороги, ж/д, здания): то же плюс `class`, `parent_guid`,
+    `elevation_of_ref_height`, `elevation_of_terrain`.
+
+Геометрия элементов уже стоит в координатах проекта (вся цепочка размещений учтена); сдвиг карты
+к ней не применяется — координаты порядка миллионов метров во float32 Houdini потеряли бы точность.
+
+`4@global_xform`:
+    Матрица самого верхнего уровня размещения — корневой площадки (если площадок нет — корневого здания)
+    в осях и единицах сцены. `s@global_xform_source` говорит, чья это матрица.
+    Чтобы поставить модель к началу координат: нода __Transform By Attribute__, Attribute = `global_xform`,
+    включить __Invert Transformation__. Чтобы вернуть обратно — то же без Invert
+    (и снять __Delete Attribute__, если атрибут ещё понадобится: по умолчанию нода его удаляет).
+
+Move to Origin:
+    Если модель далеко от начала координат (например, «общие координаты» Revit — сотни километров),
+    ставить её к началу нодой Transform By Attribute уже поздно: позиции хранятся во float32, и на расстоянии
+    5 700 км шаг сетки float32 — полметра, стена толщиной 200 мм схлопывается в ноль ещё при импорте.
+    Переключатель __Move to Origin__ делает тот же перенос (обратный `global_xform`) в двойной точности
+    до записи позиций — геометрия приходит к началу координат точной. `global_xform` остаётся исходным,
+    так что Transform By Attribute без Invert возвращает модель на место; `i@ifc_moved_to_origin` = 1,
+    а `xform` площадок и зданий в detail описывают положение относительно перенесённой геометрии.
 """
 
 
@@ -522,6 +565,48 @@ Imported: `IfcPropertySingleValue`, `IfcPropertyEnumeratedValue`, `IfcPropertyLi
 Not imported: `IfcPropertyTableValue`, `IfcPropertyReferenceValue` and other types whose value is a table or a
 reference rather than a single value. They stay in the source file and are not written on export; the node
 reports them with a warning and stores it in the `ifc_warnings` detail attribute.
+
+@detail Top levels of the file (detail attributes)
+
+Import puts into detail where the model sits in the world and how its sites and buildings are placed.
+All lengths are in metres.
+
+`s@ifc_crs`:
+    Name of the map coordinate system, e.g. `EPSG:32760`. Empty if the file is not georeferenced.
+`d@ifc_georef`:
+    Project georeference: `map_conversion` (Eastings, Northings, OrthogonalHeight, XAxisAbscissa/Ordinate, Scale as in
+    the file, plus `map_origin_m`, the model origin in map metres), `map_rotation_deg` (project X axis from map east,
+    counter-clockwise), `crs` (name, datum, map unit), `true_north` and `true_north_deg`, `wcs_matrix`, `precision`,
+    `length_unit_m`. IFC4/IFC4X3 read `IfcMapConversion` + `IfcProjectedCRS`; IFC2X3 reads the
+    `ePSet_MapConversion` / `ePSet_ProjectedCRS` property sets (buildingSMART convention).
+`d@ifc_project`:
+    Project name, GUID, phase and unit scales (`units`).
+`d[]@ifc_sites`:
+    Sites: name, GUID, `latitude`/`longitude` (decimal degrees), `ref_elevation`, `land_title_number`, `address`,
+    `psets`, and two placement matrices — `ifc_matrix` (as in the file: IFC axes, Z up, metres) and `xform`
+    (scene axes and units, row-major: `hou.Matrix4(site["xform"])`); `origin` is its translation.
+`d[]@ifc_facilities`:
+    Buildings and facilities (bridges, roads, railways in IFC4X3): the same plus `class`, `parent_guid`,
+    `elevation_of_ref_height`, `elevation_of_terrain`.
+
+Element geometry is already in project coordinates (the whole placement chain is applied). The map offset is not
+applied to it: coordinates in the millions of metres would lose precision in Houdini's float32.
+
+`4@global_xform`:
+    The matrix of the top placement level — the root site (or the root building if there is no site) — in scene
+    axes and units. `s@global_xform_source` names the object it comes from.
+    To bring the model to the origin: __Transform By Attribute__, Attribute = `global_xform`, turn on
+    __Invert Transformation__. To put it back, the same without Invert (and turn off __Delete Attribute__ if you
+    still need the attribute: the node deletes it by default).
+
+Move to Origin:
+    If the model is far from the origin (e.g. Revit shared coordinates, hundreds of kilometres away), moving it with
+    Transform By Attribute after import is too late: positions are stored in float32, and 5,700 km away the float32
+    step is half a metre — a 200 mm wall collapses to zero thickness during import. __Move to Origin__ does the same
+    move (the inverse of `global_xform`) in double precision before positions are stored, so the geometry arrives at
+    the origin intact. `global_xform` keeps the original placement, so Transform By Attribute without Invert puts the
+    model back; `i@ifc_moved_to_origin` is 1, and the site/facility `xform` in detail describe placement relative to
+    the moved geometry.
 """
 
 

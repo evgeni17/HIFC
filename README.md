@@ -1,5 +1,7 @@
 # HIFC — IFC import / export for Houdini
 
+![HIFC](docs/HIFC.jpg)
+
 HIFC adds IFC import and export to SideFX Houdini as two SOP nodes. It uses
 [IfcOpenShell](https://github.com/IfcOpenShell/IfcOpenShell), the same engine behind the
 Bonsai add-on for Blender, and does not need Blender.
@@ -61,7 +63,8 @@ toolbar/hifc.shelf      HIFC shelf
 otls/                   hifc::ifc_import / hifc::ifc_export digital assets (thin wrappers)
 python3.13libs/hifc/    all logic: ifc_read / ifc_write (pure IfcOpenShell), sop_import / sop_export (Houdini layer)
 vendor/                 IfcOpenShell per platform (not in git)
-tests/                  dataset download + round-trip test
+tests/                  dataset download, round-trip, core and Houdini regression tests
+docs/                   README images
 ```
 
 ## Testing
@@ -89,7 +92,19 @@ See [tests/README.md](tests/README.md) for the reference results.
 * On export, drop vendor property sets you do not need (**Property Sets to Export**, e.g. `* ^ArchiCADProperties`).
 * Measure your own files: `hython tests/perf_bench.py model.ifc report.json`.
 
-## Limitations (0.4.1)
+## Georeference and top-level data
+
+Import writes the file's top levels into detail attributes: `s@ifc_crs`, `d@ifc_georef` (map conversion, CRS,
+true north), `d@ifc_project`, `d[]@ifc_sites` (latitude/longitude, elevation, placement) and `d[]@ifc_facilities`
+(buildings and other facilities with their placement). Each site/facility has `xform`, ready for
+`hou.Matrix4(...)`. The map offset is not applied to the geometry; see the node help (F1) for all fields.
+
+`4@global_xform` is the matrix of the top placement level (root site). Transform By Attribute with
+Attribute = `global_xform` and *Invert Transformation* brings the model to the origin. For models far from the origin
+turn on **Move to Origin** on the import node instead: the same move is done in double precision before positions are
+stored in float32, so nothing is lost; Transform By Attribute without Invert puts the model back.
+
+## Limitations (0.5)
 
 * Geometry is exported as meshes (`IfcPolygonalFaceSet`). There are no parametric extrusions or profiles yet.
 * Type objects (`IfcTypeProduct`), openings and host/opening relations are not written;
@@ -99,6 +114,7 @@ See [tests/README.md](tests/README.md) for the reference results.
 * Properties: single values, enumerated and list values, bounded values and quantities are imported;
   `IfcComplexProperty` is flattened to `Parent.Child`; table and reference properties are not imported and
   are reported as a node warning and in the `ifc_warnings` detail attribute.
+* Georeference is read into detail attributes but not written on export yet.
 * Georeferenced models with very large coordinates are not tested yet (Houdini stores positions in float32).
 
 ## License

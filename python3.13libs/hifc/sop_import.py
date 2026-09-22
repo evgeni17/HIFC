@@ -21,7 +21,7 @@ ensure_vendor_path()
 _CACHE = {}
 _CACHE_MAX = 3
 # формат записей элемента: менять при изменении состава rec (иначе старый кэш отдаст записи без новых полей)
-_REC_FORMAT = 3
+_REC_FORMAT = 4
 
 
 def _owner(node):
@@ -240,6 +240,17 @@ def cook(node):
     min_copies = max(2, int(_ev(owner, "mincopies", 2)))
     recs, stats = _load(path, include, exclude, path_mode, want_psets, threads, pset_names, disk_cache)
 
+    # верхний уровень размещения (корневая площадка) -> 4@global_xform;
+    # Move to Origin: переносим модель в двойной точности ДО записи во float32 P
+    from . import ifc_read
+    top_m, top_src = ifc_read.top_placement((stats or {}).get("context"))
+    to_origin = bool(_ev(owner, "toorigin", 0)) and top_m is not None
+    if to_origin:
+        inv = np.linalg.inv(top_m)
+        # записи из кэша не трогаем: копия с новой матрицей (дёшево — 4x4 на элемент)
+        recs = [dict(r, matrix=inv @ np.asarray(r["matrix"], dtype=np.float64)) if r.get("matrix") is not None else r
+                for r in recs]
+
     # повторяющаяся геометрия (одинаковый geom_id от IfcOpenShell: окна, двери, мебель)
     counts = {}
     for r in recs:
@@ -286,12 +297,94 @@ def cook(node):
     geo.setGlobalAttribValue("ifc_file", path)
     geo.addAttrib(hou.attribType.Global, "ifc_elements", 0)
     geo.setGlobalAttribValue("ifc_elements", len(recs))
+    _write_context(geo, (stats or {}).get("context"), y_up, scale, np.linalg.inv(top_m) if to_origin else None)
+    _write_global_xform(geo, top_m, top_src, y_up, scale, to_origin)
     warn = warning_text(stats)
     geo.addAttrib(hou.attribType.Global, "ifc_warnings", "")
     if warn:
         geo.setGlobalAttribValue("ifc_warnings", warn)
         # предупреждение ноды: геометрия уже построена, кук на этом заканчивается
         raise hou.NodeWarning(warn)
+
+
+def _clean(v):
+    """Значение для dict-атрибута Houdini: без None, numpy -> python, ключи — строки."""
+    if isinstance(v, dict):
+        return {str(k): _clean(x) for k, x in v.items() if x is not None}
+    if isinstance(v, (list, tuple)):
+        return [_clean(x) for x in v if x is not None]
+    if isinstance(v, np.generic):
+        return v.item()
+    return v
+
+
+def _detail_dict(geo, name, value):
+    if geo.findGlobalAttrib(name) is None:
+        geo.addAttrib(hou.attribType.Global, name, {})
+    geo.setGlobalAttribValue(name, _clean(value))
+
+
+def _detail_dict_array(geo, name, values):
+    if geo.findGlobalAttrib(name) is None:
+        geo.addArrayAttrib(hou.attribType.Global, name, hou.attribData.Dict)
+    geo.setGlobalAttribValue(name, [_clean(v) for v in values])
+
+
+def _hou_xform(ifc_matrix, y_up, scale):
+    """Матрица IFC (4x4, метры, столбцовые векторы) -> hou.Matrix4 по строкам (осями и единицами сцены)."""
+    A, b = _hou_placement(np.asarray(ifc_matrix, dtype=np.float64).reshape(4, 4), y_up, scale)
+    M = np.eye(4)
+    M[:3, :3] = A.T      # Houdini: вектор-строка, перенос в последней строке
+    M[3, :3] = b
+    return [float(x) for x in M.reshape(16)], [float(x) for x in b]
+
+
+def _write_global_xform(geo, top_m, top_src, y_up, scale, moved):
+    """4@global_xform — размещение самого верхнего уровня (корневой площадки) в осях и единицах сцены.
+
+    Transform By Attribute (Attribute = global_xform, Invert Transformation) ставит модель к началу координат.
+    Точные значения (double) — в d[]@ifc_sites / d@ifc_georef; сам атрибут, как и P, во float32.
+    """
+    vals = _hou_xform(top_m, y_up, scale)[0] if top_m is not None else [float(x) for x in np.eye(4).reshape(16)]
+    if geo.findGlobalAttrib("global_xform") is None:
+        geo.addAttrib(hou.attribType.Global, "global_xform", tuple([0.0] * 16))
+    geo.setGlobalAttribValue("global_xform", tuple(vals))
+    try:
+        geo.findGlobalAttrib("global_xform").setOption("type", "matrix")   # typeinfo: матрица
+    except Exception:
+        pass
+    geo.addAttrib(hou.attribType.Global, "global_xform_source", "")
+    geo.setGlobalAttribValue("global_xform_source", top_src or "none")
+    geo.addAttrib(hou.attribType.Global, "ifc_moved_to_origin", 0)
+    geo.setGlobalAttribValue("ifc_moved_to_origin", 1 if moved else 0)
+
+
+def _write_context(geo, ctx, y_up, scale, rebase=None):
+    """Верхние уровни файла в detail: геопривязка проекта, площадки, здания/сооружения.
+
+    У площадок и зданий два вида матрицы: "ifc_matrix" — как в файле (метры, оси IFC, Z вверх),
+    "xform" — в осях и единицах сцены, готова для hou.Matrix4(...) (и "origin" — её перенос).
+    rebase — обратная матрица верхнего уровня при Move to Origin: тогда "xform" описывает положение
+    относительно уже перенесённой геометрии этой ноды, а "ifc_matrix" остаётся как в файле.
+    """
+    geo.addAttrib(hou.attribType.Global, "ifc_crs", "")
+    if not ctx:
+        return
+    georef = ctx.get("georef") or {}
+    geo.setGlobalAttribValue("ifc_crs", str((georef.get("crs") or {}).get("Name", "") or ""))
+    _detail_dict(geo, "ifc_project", dict(ctx.get("project") or {}, units=ctx.get("units") or {}))
+    _detail_dict(geo, "ifc_georef", georef)
+    for name, key in (("ifc_sites", "sites"), ("ifc_facilities", "facilities")):
+        items = []
+        for it in ctx.get(key) or ():
+            d = dict(it)
+            d["ifc_matrix"] = d.pop("matrix")
+            m = np.asarray(d["ifc_matrix"], dtype=np.float64).reshape(4, 4)
+            if rebase is not None:
+                m = rebase @ m
+            d["xform"], d["origin"] = _hou_xform(m, y_up, scale)
+            items.append(d)
+        _detail_dict_array(geo, name, items)
 
 
 def warning_text(stats):

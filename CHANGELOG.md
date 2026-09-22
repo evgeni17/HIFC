@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.5.1 — 2026-09-22
+* **`4@global_xform`** — the matrix of the top placement level (the root site, or the root building if there is no
+  site) in scene axes and units, with `s@global_xform_source` naming where it comes from. Transform By Attribute with
+  Attribute = `global_xform` and *Invert Transformation* moves the model to the origin; without Invert it moves it back.
+* **Move to Origin** (import, off by default) does that move in double precision *before* positions are stored.
+  Needed for far-away models: at 5,700 km the float32 step is half a metre, and a 200 mm wall imported in place
+  collapses to zero thickness before any SOP can move it. With Move to Origin it arrives exact; `global_xform` keeps
+  the original placement for the way back, `i@ifc_moved_to_origin` is set, and site/facility `xform` follow the moved
+  geometry. Tested with a synthetic model placed 5,700 km from the origin.
+
+## 0.5.0 — 2026-09-22
+* **Top levels of the file in detail attributes.** Import now reads where the model sits in the world and how its
+  sites and buildings are placed:
+  `s@ifc_crs`, `d@ifc_georef` (IfcMapConversion + IfcProjectedCRS in IFC4/IFC4X3, the `ePSet_MapConversion` /
+  `ePSet_ProjectedCRS` convention in IFC2X3; map origin in metres, map rotation, true north, WCS, precision),
+  `d@ifc_project` (name, GUID, phase, unit scales), `d[]@ifc_sites` (latitude/longitude in decimal degrees,
+  reference elevation, land title, address, property sets) and `d[]@ifc_facilities` (buildings; bridges, roads,
+  railways in IFC4X3; elevations, parent site). Sites and facilities carry their placement twice: `ifc_matrix` as in
+  the file (IFC axes, metres) and `xform` in scene axes and units, ready for `hou.Matrix4`. All lengths in metres.
+* The map offset is deliberately not applied to the geometry (float32 precision); it is available for later use.
+* **File Info** shows the CRS, map origin and rotation, true north, and site/facility origins.
+* New `tests/georef_fixture.py` (georeferenced IFC4 and IFC2X3 test files); `test_core.py` checks every value,
+  `houdini_regression.py` checks the detail attributes, the `xform` matrices against the geometry, and the disk cache.
+
 ## 0.4.1 — 2026-09-21
 Fixes from the second independent test report (HIFC-test-v02) and the stricter tests it asked for:
 * **Units of an overridden property.** If an occurrence overrode a property of its type with a dimensionless

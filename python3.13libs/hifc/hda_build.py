@@ -51,6 +51,12 @@ def _import_ptg():
     f = hou.FolderParmTemplate("conv", "Conversion", folder_type=hou.folderType.Simple)
     f.addParmTemplate(hou.ToggleParmTemplate("yup", "Z-Up to Y-Up", default_value=True))
     f.addParmTemplate(hou.FloatParmTemplate("scale", "Scale (units per meter)", 1, default_value=(1.0,), min=0.0001, max=1000))
+    f.addParmTemplate(hou.ToggleParmTemplate(
+        "toorigin", "Move to Origin", default_value=False,
+        help="Moves the model so that its top placement (the root site) is at the world origin. The move is done "
+             "in double precision before positions are stored, so far-away models keep their accuracy. "
+             "4@global_xform still holds the original placement: Transform By Attribute with global_xform "
+             "(Invert off) puts the model back."))
     f.addParmTemplate(hou.ToggleParmTemplate("color", "Colors from IFC Styles", default_value=True))
     f.addParmTemplate(hou.ToggleParmTemplate("psets", "Read Property Sets", default_value=True))
     f.addParmTemplate(hou.StringParmTemplate("psetfilter", "Property Sets", 1, default_value=("*",),

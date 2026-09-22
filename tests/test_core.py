@@ -176,6 +176,38 @@ def main():
     mutate("unit mark lost", lambda b: b[0]["measures"]["Qto_WallBaseQuantities"].pop("Length"))
     mutate("property value changed", lambda b: b[0]["psets"]["Qto_WallBaseQuantities"].__setitem__("Length", 2.5))
 
+    print("9. Top levels: georeference, sites, buildings (IFC4 and the IFC2X3 ePSet convention)")
+    import georef_fixture as gf
+    ex = gf.EXPECT
+
+    def near(a, b, tol=1e-6):
+        return a is not None and all(abs(x - y) <= tol for x, y in zip(a, b))
+    for schema in ("IFC4", "IFC2X3"):
+        path = gf.make(os.path.join(TMP, "georef_%s.ifc" % schema), schema)
+        st = {}
+        n = len(list(ifc_read.iter_ifc(path, stats=st)))
+        c = st.get("context") or {}
+        g = c.get("georef") or {}
+        mc = g.get("map_conversion") or {}
+        check(n == 1 and (g.get("crs") or {}).get("Name") == ex["crs"], "%s CRS = %r" % (schema, (g.get("crs") or {}).get("Name")))
+        check(near(mc.get("map_origin_m"), ex["map_origin_m"]), "%s map origin in metres = %r" % (schema, mc.get("map_origin_m")))
+        check(abs((g.get("map_rotation_deg") or 0) - ex["map_rotation_deg"]) < 1e-9,
+              "%s map rotation = %.6f deg" % (schema, g.get("map_rotation_deg") or 0))
+        site = (c.get("sites") or [{}])[0]
+        bld = (c.get("facilities") or [{}])[0]
+        sm, bm = site.get("matrix") or [0] * 16, bld.get("matrix") or [0] * 16
+        check(near([sm[3], sm[7], sm[11]], ex["site_origin_m"]), "%s site origin (m) = %r" % (schema, [sm[3], sm[7], sm[11]]))
+        check(abs(site.get("latitude", 0) - ex["latitude"]) < 1e-6 and abs(site.get("longitude", 0) - ex["longitude"]) < 1e-6,
+              "%s site lat/lon = %.6f, %.6f" % (schema, site.get("latitude", 0), site.get("longitude", 0)))
+        check(abs((site.get("ref_elevation") or 0) - ex["ref_elevation_m"]) < 1e-9, "%s site elevation in metres" % schema)
+        check(site.get("psets", {}).get("Pset_SiteCommon", {}).get("TotalArea") == 1200.0, "%s site property set" % schema)
+        check(near([bm[3], bm[7], bm[11]], ex["building_origin_m"]),
+              "%s building origin = whole placement chain: %r" % (schema, [bm[3], bm[7], bm[11]]))
+        check(abs((bld.get("elevation_of_ref_height") or 0) - ex["elevation_of_ref_height_m"]) < 1e-9
+              and bld.get("parent_class") == "IfcSite", "%s building elevation and parent" % schema)
+    tn = ifc_read.file_context(ifcopenshell.open(os.path.join(TMP, "georef_IFC4.ifc")))["georef"].get("true_north_deg")
+    check(tn is not None and abs(tn - 30.0) < 1e-9, "IFC4 true north = %r deg" % tn)
+
     print("\n%s (%d failures). Files: %s" % ("PASSED" if not FAILS else "FAILED", len(FAILS), TMP))
     return 1 if FAILS else 0
 

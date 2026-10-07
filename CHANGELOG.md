@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.7.0-dev.2 — 2026-10-07
+* **Compatibility is now compared element by element.** `tests/hip_compat.py` records, for every element (by GUID):
+  class, storey, name, materials, property sets and measures, triangle count, total area, the span of its face
+  centres, and per colour the area it covers with the centre of that area. Packed primitives are opened so face
+  colours are seen in Packed and Auto as well, not just the one colour of the packed primitive. Asset versions are
+  compared against each other per element in every output mode, and the same comparison runs after the scene is
+  reopened. Ten negative self-checks run on every build: a missing element, an extra one, a changed class, storey,
+  material, property, triangle count, area, a lost colour and colours swapped between faces must all be reported.
+  The sample model grew to three elements with different classes, storeys, materials, properties and two colours each.
+* `freeze.py --archive N.M` packs the release reference (scene, IFC, snapshot, `VERSIONS.json`) into
+  `dist/hifc_N.M_reference.zip`; releases on GitHub carry it as an attachment, and the procedure is in CONTRIBUTING.
+* Reopening a scene compares only the fields its snapshot recorded, so a reference saved by an older release still
+  checks out against a newer plugin.
+
 ## 0.7.0-dev.1 — 2026-10-07
 * Development moved to assets `::7.0` (`freeze.py --next 7.0`, which also raised the plugin version). `::6.0` and
   `::1.0` stay frozen and keep serving the scenes that use them. No behaviour changes yet.

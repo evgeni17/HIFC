@@ -47,7 +47,20 @@ python3 deploy.py ~/tools_houdini/HIFC
 python3 deploy.py ~/tools_houdini/HIFC
 python3 freeze.py --seal N.M                # FROZEN.sha256 + the frozen record in VERSIONS.json
 python3 freeze.py --next <next version>     # development moves on; then deploy, build_all, deploy again
+python3 freeze.py --archive N.M             # dist/hifc_N.M_reference.zip: the reference scene of this release
 ```
+
+Publishing a release:
+
+```bash
+git tag -a vX.Y.Z <release commit> -m "HIFC X.Y.Z — ..."
+git push origin vX.Y.Z
+gh release create vX.Y.Z dist/hifc_N.M_reference.zip --title "HIFC X.Y.Z" --notes-file <changelog section>
+```
+
+The release always carries the reference archive: the `.hip` saved at release time, the IFC it imports, the IFC each
+asset version exported from it, the state snapshot and `VERSIONS.json`. Rebuilding that scene with a later version of
+the plugin is not the same thing — the historical reference is what the release actually produced.
 
 IfcOpenShell is loaded once per Houdini session, so all asset versions share it. That is why every version records
 in `VERSIONS.json` the module set it was verified with, and `also_tested` lists later sets it was re-checked against.

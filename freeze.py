@@ -6,6 +6,7 @@
     python3 freeze.py 1.0            # python3.13libs/hifc -> python3.13libs/hifc_1_0 (FROZEN, HDA_VERSION=1.0)
     python3 freeze.py --seal 1.0     # контрольные суммы + запись в VERSIONS.json (после сборки HDA)
     python3 freeze.py --next 6.0     # разработка переходит на следующую версию ассетов
+    python3 freeze.py --archive 6.0  # dist/hifc_6.0_reference.zip: эталонная сцена, её IFC и снимок состояния
 
 Порядок выпуска целиком (см. CONTRIBUTING.md):
     freeze.py N.M -> deploy.py -> в Houdini build_all(force=True, otls=<репозиторий>/otls) замороженной копии
@@ -144,6 +145,32 @@ def _suggest_next(version):
     return "%d.0" % (major + 1)
 
 
+def archive(version):
+    """Архив эталона выпуска: HIP, исходный и экспортированные IFC, снимок состояния.
+
+    Пересоздать сцену текущей версией плагина — не то же самое: исторический эталон должен остаться
+    ровно таким, каким его записал выпуск. Архив кладётся в dist/ и прикладывается к релизу на GitHub.
+    """
+    import zipfile
+    ref = os.path.join(HERE, "tests", "reference")
+    hip = os.path.join(ref, "hifc_%s_reference.hip" % version.replace(".", "_"))
+    if not os.path.isfile(hip):
+        print("archive: %s not found — build it first: hython tests/hip_compat.py build %s" % (hip, hip))
+        return 1
+    dist = os.path.join(HERE, "dist")
+    os.makedirs(dist, exist_ok=True)
+    out = os.path.join(dist, "hifc_%s_reference.zip" % version)
+    names = [f for f in sorted(os.listdir(ref))
+             if f.endswith((".hip", ".json", ".ifc", ".md")) and not f.endswith(".hip.bak")]
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
+        for f in names:
+            z.write(os.path.join(ref, f), os.path.join("hifc_%s_reference" % version, f))
+        z.writestr(os.path.join("hifc_%s_reference" % version, "VERSIONS.json"),
+                   open(os.path.join(HERE, "VERSIONS.json")).read())
+    print("archive: %s (%d files, %.1f KB)" % (out, len(names) + 1, os.path.getsize(out) / 1024.0))
+    return 0
+
+
 def next_version(version):
     """Разработка переходит на следующую версию ассетов (номер должен быть свободным и больше всех занятых)."""
     init = os.path.join(LIBS, PKG, "__init__.py")
@@ -196,7 +223,10 @@ def main():
     ap.add_argument("version", help="версия ассетов, например 1.0")
     ap.add_argument("--seal", action="store_true", help="посчитать суммы и записать версию в VERSIONS.json")
     ap.add_argument("--next", action="store_true", help="перевести разработку на эту версию ассетов")
+    ap.add_argument("--archive", action="store_true", help="собрать dist/hifc_<версия>_reference.zip для релиза")
     args = ap.parse_args()
+    if args.archive:
+        return archive(args.version)
     if args.seal:
         return seal(args.version)
     if args.next:

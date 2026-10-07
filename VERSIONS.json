@@ -60,7 +60,7 @@
       },
       "houdini": "22.0.429",
       "python": "3.13",
-      "plugin": "0.7.0.dev1"
+      "plugin": "0.7.0.dev2"
     }
   }
 }

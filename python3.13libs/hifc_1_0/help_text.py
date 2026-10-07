@@ -1,0 +1,641 @@
+# -*- coding: utf-8 -*-
+# SPDX-FileCopyrightText: 2026 EOK
+# SPDX-License-Identifier: Apache-2.0
+"""Тексты справки HDA (Houdini wiki markup). Показываются по F1 / кнопке "?" на ноде."""
+
+HELP_EXPORT_RU = u"""= HIFC IFC Export =
+
+#type: node
+#context: sop
+#internal: hifc::ifc_export
+#icon: SOP/rop_geometry
+
+\"\"\"Записывает входную геометрию в IFC (IfcOpenShell, без Blender). Структуру BIM задают атрибуты примитивов.\"\"\"
+
+Перед экспортом нажмите __Check Attributes__ — нода проверит атрибуты и напишет отчёт во вкладке Report, ничего не записывая на диск.
+Готовый шаблон атрибутов: меню __HIFC > Create Attribute Template__ (Primitive Wrangle после выбранной ноды).
+
+== Как устроена модель BIM ==
+
+IFC — это не сцена, а дерево «кто в чём находится»:
+
+{{{
+IfcProject            <- параметр Project
+ └ IfcSite            <- параметр Site
+    └ IfcBuilding     <- параметр Building
+       └ IfcBuildingStorey          <- s@ifc_storey
+          └ IfcElementAssembly      <- промежуточные сегменты s@path
+             └ IfcElementAssembly
+                └ IfcMember / IfcLightFixture / ...   <- последний сегмент s@path
+}}}
+
+*Проект, участок и здание* задаются параметрами ноды (вкладка Project).
+*Этаж* — атрибутом `s@ifc_storey`. *Всё, что ниже этажа,* — атрибутом `s@path`.
+
+== Главное правило: один path = один физический элемент ==
+
+Все примитивы с одинаковым значением `s@path` склеиваются в *один* IFC-элемент.
+
+* Элемент — это то, что в реальности считают, заказывают и монтируют по отдельности: профиль, подвес, лампа, кронштейн, панель.
+* Нельзя класть два физических предмета под один path — в спецификации они станут одной позицией.
+* Нельзя делить один предмет на несколько path — он станет несколькими позициями.
+* Нужны разные цвета внутри одного элемента? Задайте разный `Cd` на примитивах одного path — получится один элемент с несколькими стилями.
+
+== s@path — иерархия ==
+
+{{{
+/Frame_001/Frame_001_Profile/Profile_0007
+ │          │                 └ элемент (IfcMember)
+ │          └ группа  -> IfcElementAssembly
+ └ система            -> IfcElementAssembly
+}}}
+
+* Разделитель — `/`. Первый `/` необязателен.
+* Каждый промежуточный сегмент — сборка (`Assembly Class` на вкладке Structure, по умолчанию IfcElementAssembly). Одинаковые префиксы — одна и та же сборка.
+* Путь не может быть одновременно элементом и папкой: `/A/B` и `/A/B/C` — ошибка.
+* Имена сегментов: латиница, цифры, `_`, `-`, `.`, пробел. Имя сегмента должно быть уникальным среди «соседей».
+* *Имена должны быть стабильными.* Если GUID не задан, он вычисляется из path + storey: тот же путь — тот же GlobalId при каждом экспорте. Не используйте `@primnum` или случайные числа в path — иначе BIM-менеджер получит «новые» элементы при каждой выгрузке.
+* Глубина 2–4 уровня — нормально. Не делайте сборку из одного элемента без необходимости.
+* __Skip Leading Segments__ отрезает начало пути (например, служебный `/obj/geo1`).
+
+== Класс элемента ==
+
+Порядок определения класса:
+# `s@ifc_class` на примитиве;
+# первое совпавшее правило __Class Rules__ (маска по имени элемента или полному пути, например `Bracket_*`);
+# __Default Class__ (IfcBuildingElementProxy).
+
+`s@ifc_predefined` — уточнение класса (PredefinedType), значение из перечисления этого класса.
+Неизвестное значение станет USERDEFINED, а текст уйдёт в ObjectType. Не знаете — пишите `NOTDEFINED`.
+
+Частые классы:
+
+`IfcMember` / `MEMBER`, `STRUT`, `BRACE`, `MULLION`:
+    Профили, стержни, рейки, тяги.
+`IfcBeam` / `BEAM`, `JOIST`, `LINTEL`:
+    Балки, прогоны.
+`IfcColumn` / `COLUMN`, `PILASTER`:
+    Колонны, стойки.
+`IfcPlate` / `SHEET`, `CURTAIN_PANEL`:
+    Листы, панели.
+`IfcSlab` / `FLOOR`, `ROOF`, `LANDING`:
+    Плиты.
+`IfcWall` / `STANDARD`, `PARTITIONING`:
+    Стены, перегородки.
+`IfcCovering` / `CEILING`, `CLADDING`, `FLOORING`:
+    Отделка, подвесной потолок.
+`IfcRailing` / `HANDRAIL`, `GUARDRAIL`:
+    Ограждения.
+`IfcDiscreteAccessory` / `BRACKET`, `SHOE`, `NOTDEFINED`:
+    Подвесы, кронштейны, закладные.
+`IfcFastener` / `WELD`, `GLUE`; `IfcMechanicalFastener` / `BOLT`, `ANCHORBOLT`:
+    Крепёж.
+`IfcLightFixture` / `POINTSOURCE`, `DIRECTIONSOURCE`, `NOTDEFINED`:
+    Светильники, светящиеся трубки.
+`IfcCableCarrierSegment` / `CABLETRAYSEGMENT`, `CONDUITSEGMENT`:
+    Кабельные лотки, короба.
+`IfcPipeSegment` / `RIGIDSEGMENT`:
+    Трубы (инженерные системы, не декоративные).
+`IfcFurniture` / `TABLE`, `CHAIR`, `SHELF`:
+    Мебель.
+`IfcAnnotation`:
+    Метки, бирки без физического объёма.
+`IfcBuildingElementProxy`:
+    Всё, чему нет подходящего класса. Лучше честный Proxy, чем неверный класс.
+
+Схемы: IFC4 — по умолчанию (Revit, Archicad, Bonsai, Navisworks). IFC4X3 — для инфраструктуры (IfcCourse, IfcTrackElement...). IFC2X3 — только для старого ПО, часть классов недоступна (IfcPipeSegment станет Proxy).
+
+== Имена и маркировка ==
+
+`s@ifc_name`:
+    Name — подпись в дереве BIM. Если не задан — последний сегмент path.
+`s@ifc_tag`:
+    Tag — марка/позиция на чертеже (например `F-01.P-007`).
+`s@ifc_object_type`:
+    ObjectType — ваш тип/артикул (Profile_40x40, Tube_1500).
+`s@ifc_description`:
+    Description — свободный текст.
+
+== Этаж ==
+
+`s@ifc_storey` — имя этажа (`Level 01`, `+3.600`). Все элементы с одинаковым значением попадут в один IfcBuildingStorey.
+Пусто — берётся __Default Storey__. Сборки строятся внутри этажа: одинаковый префикс path на разных этажах даст разные сборки.
+
+== Материал и цвет ==
+
+`s@ifc_material`:
+    Имя материала (IfcMaterial). Одинаковые имена — один материал на весь проект. Пишите реальный материал: `Aluminium`, `Steel S235`, `Polycarbonate`.
+`s[]@ifc_materials`:
+    Несколько материалов одного элемента (например, окно: `Glass`, `Wood`) -> IfcMaterialConstituentSet (в IFC2X3 — IfcMaterialList). Имеет приоритет над `s@ifc_material`. Слои и толщины не переносятся.
+`Cd` (prim или point), `f@Alpha`:
+    Цвет и прозрачность -> IfcSurfaceStyle. Одинаковый цвет = один стиль.
+`s@ifc_style`:
+    Имя стиля (иначе генерируется `Color_RRGGBB`).
+__Packed Colors__:
+    Для packed-примитивов: *Per Face* — берутся цвета граней внутри (результат импорта сохраняется как есть); *Override* — `Cd`/`Alpha` самого packed-примитива перекрашивают весь элемент.
+
+== Свойства (Property Sets) ==
+
+Основной способ — словарь `d@ifc_psets` вида `{ИмяНабора: {Свойство: значение}}`:
+
+{{{
+#!vex
+dict data;   data["Length_mm"] = 1500;  data["SystemID"] = 1;
+dict common; common["IsExternal"] = 0;  common["LoadBearing"] = 0;
+dict qto;    qto["Length"] = 1500;
+dict ps;
+ps["ACME_Data"]                 = data;    // свой набор
+ps["Pset_MemberCommon"]        = common;  // стандартный набор buildingSMART
+ps["Qto_MemberBaseQuantities"] = qto;     // количества
+d@ifc_psets = ps;
+}}}
+
+* Наборы с именем `Pset_...` — стандартные, их свойства проверяются по шаблонам buildingSMART (типы значений приводятся автоматически: 0/1 -> Boolean). *Свои наборы не называйте на `Pset_`* — используйте префикс проекта (`ACME_Data`, `ACME_Common`).
+* Наборы `Qto_...` с числовыми значениями пишутся как IfcElementQuantity (количества для смет).
+* *Единицы:* числа в `d@ifc_psets` пишутся как есть, в единицах проекта IFC (параметр Length Unit, по умолчанию *мм*). Умножайте метры Houdini на 1000.
+* *Величины с единицами — `d@ifc_measures`* вида `{ИмяНабора: {Свойство: "LENGTH" | "AREA" | "VOLUME"}}`. Отмеченные так значения считаются заданными в СИ (м, м², м³) и пересчитываются в единицы файла автоматически, с правильным типом IFC (IfcLengthMeasure и т.д.). HIFC IFC Import заполняет этот атрибут сам, поэтому импорт -> экспорт не искажает количества при смене единиц.
+* __Property Sets to Export__ — какие наборы из словаря писать (маски, `^маска` — исключить): лишние наборы производителя ПО заметно замедляют запись больших моделей.
+* Быстрый способ без словаря: перечислите атрибуты в __Attributes to Pset__ (маски, например `len_* N_*`) — они попадут в набор __Pset Name__ (HoudiniAttributes).
+* __Add Houdini_Path Property__ добавляет исходный path в этот же набор — удобно для обратной связи.
+
+== GUID ==
+
+`s@ifc_guid` — 22-символьный IFC GlobalId (например, сохранённый после импорта). Если задан и корректен — используется как есть.
+Иначе GUID вычисляется из path + storey + __GUID Seed__: стабилен между экспортами. Меняйте GUID Seed, только если нужно намеренно «перевыпустить» все элементы.
+
+== Геометрия ==
+
+* Только полигоны. Packed-примитивы раскрываются автоматически; кривые, точки и объёмы пропускаются.
+* Замкнутые оболочки с нормалями наружу (стандарт Houdini). Не оставляйте вырожденных полигонов.
+* Единицы сцены — метры (параметр Scene Unit), ось Y вверх (переворачивается в Z-up).
+* Держите полигонаж разумным: IFC — не рендер. Цилиндр из 12–16 сегментов достаточен.
+* Точка вставки элемента — низ центра габарита (__Element Origin__).
+
+== Чек-лист перед выгрузкой ==
+
+# `s@path` есть на каждом примитиве; один path = один предмет.
+# Класс: `s@ifc_class` или Class Rules; нет «лишних» Proxy.
+# `s@ifc_storey` задан (или устраивает Default Storey).
+# `s@ifc_material` и `Cd` заданы по категориям.
+# Свойства в `d@ifc_psets`, свои наборы не на `Pset_`, длины в мм.
+# __Check Attributes__ без ошибок -> __Export IFC__ -> включите __Validate After Export__.
+# Откройте файл в Bonsai / BIMvision и проверьте дерево.
+
+@parameters
+
+== Buttons ==
+
+Export IFC:
+    Записать файл.
+Check Attributes:
+    Проверить атрибуты и показать отчёт (файл не пишется).
+
+== Project ==
+
+Schema:
+    IFC4 (рекомендуется), IFC4X3, IFC2X3.
+Length Unit:
+    Единица длины в файле (мм по умолчанию). В ней же задаются длины в свойствах.
+Scene Unit:
+    Сколько метров в единице Houdini (1 = метры).
+GUID Seed:
+    Добавка к ключу генерации GUID.
+
+== Structure ==
+
+Path Attribute:
+    Строковый prim-атрибут иерархии.
+Skip Leading Segments:
+    Отбросить первые N сегментов пути.
+Class Rules:
+    Маска -> класс -> PredefinedType, если нет `s@ifc_class`.
+
+== Attributes ==
+
+Имена атрибутов, из которых берутся класс, тип, имя, марка, GUID, этаж, материал, стиль и словарь свойств.
+"""
+
+HELP_IMPORT_RU = u"""= HIFC IFC Import =
+
+#type: node
+#context: sop
+#internal: hifc::ifc_import
+#icon: SOP/file
+
+\"\"\"Читает IFC через IfcOpenShell. Один элемент — один packed-примитив (или набор треугольников).\"\"\"
+
+Результат несёт те же атрибуты, которые понимает HIFC IFC Export, поэтому импорт -> правка -> экспорт сохраняет структуру и GlobalId.
+
+@parameters
+
+IFC File:
+    Файл IFC2X3 / IFC4 / IFC4X3.
+Output:
+    *Auto* (по умолчанию) — повторяющаяся геометрия (одинаковые окна, двери, мебель) кладётся в память один раз и расставляется packed-копиями по матрицам из IFC, остальное становится обычными полигонами: и память, и вьюпорт остаются лёгкими. *Packed Primitive per Element* — каждый элемент отдельным packed-примитивом (как объекты в Bonsai). *Polygons* — всё плоской сеткой.
+Instance From N Copies:
+    Сколько одинаковых элементов должно быть, чтобы геометрия хранилась один раз (по умолчанию 2).
+Path:
+    "From First Assembly" — путь от первой сборки (для обратного экспорта); "Full" — от IfcProject.
+Include / Exclude Classes:
+    Фильтр по классам через пробел.
+Property Sets:
+    Какие наборы свойств читать (маски, `^маска` — исключить), например `Pset_* Qto_*` или `* ^ArchiCADProperties`. Чтение свойств — самая долгая часть импорта: меньше наборов — быстрее.
+Disk Cache:
+    Разобранные элементы сохраняются в `$HOUDINI_TEMP_DIR/hifc_cache`; повторное открытие того же (неизменённого) файла — почти мгновенно, в том числе в новой сессии. Кнопка __Clear Disk Cache__ очищает кэш.
+
+@attributes
+
+`path`, `ifc_guid`, `ifc_class`, `ifc_predefined`, `ifc_name`, `ifc_tag`, `ifc_object_type`, `ifc_description`,
+`ifc_storey`, `ifc_type`, `ifc_material`, `s[]@ifc_materials`, `ifc_style`, `ifc_id`, `d@ifc_psets`, `d@ifc_measures`, `Cd`, `Alpha`.
+
+Группы примитивов: `ifc_packed` — packed-копии повторяющейся геометрии, `ifc_polygons` — обычные полигоны.
+Одним Blast или Delete по группе можно отделить инстансы от остальной модели.
+
+@properties Что переносится из свойств IFC
+
+Переносятся: `IfcPropertySingleValue`, `IfcPropertyEnumeratedValue`, `IfcPropertyListValue`,
+`IfcPropertyBoundedValue` (как `нижняя..верхняя`) и величины из `IfcElementQuantity`.
+`IfcComplexProperty` разворачивается в плоские имена: свойство `Child` внутри `Nested` становится `Nested.Child`
+(при экспорте оно так и запишется — обычным свойством с точкой в имени, вложенность не восстанавливается).
+
+Не переносятся: `IfcPropertyTableValue`, `IfcPropertyReferenceValue` и другие типы, у которых значение —
+таблица или ссылка, а не одно число. Такие свойства остаются в исходном файле и при экспорте не пишутся;
+нода сообщает о них предупреждением и записывает его в детальный атрибут `ifc_warnings`.
+
+@detail Верхние уровни файла (detail-атрибуты)
+
+Импорт кладёт в detail данные о том, где модель стоит в мире и как расставлены её площадки и здания.
+Все длины — в метрах.
+
+`s@ifc_crs`:
+    Имя системы координат карты, например `EPSG:32760`. Пусто, если у файла нет геопривязки.
+`d@ifc_georef`:
+    Геопривязка проекта: `map_conversion` (Eastings, Northings, OrthogonalHeight, XAxisAbscissa/Ordinate, Scale —
+    как в файле, плюс `map_origin_m` — сдвиг начала координат модели в метрах карты), `map_rotation_deg` —
+    поворот оси X проекта от оси «восток» карты против часовой, `crs` (имя, датум, единицы карты),
+    `true_north` и `true_north_deg`, `wcs_matrix`, `precision`, `length_unit_m`.
+    В IFC4/IFC4X3 данные берутся из `IfcMapConversion` + `IfcProjectedCRS`,
+    в IFC2X3 — из наборов `ePSet_MapConversion` / `ePSet_ProjectedCRS` (соглашение buildingSMART).
+`d@ifc_project`:
+    Имя, GUID и фаза проекта, масштабы единиц (`units`).
+`d[]@ifc_sites`:
+    Площадки: имя, GUID, `latitude`/`longitude` (десятичные градусы), `ref_elevation`, `land_title_number`,
+    `address`, `psets`, и две матрицы размещения — `ifc_matrix` (как в файле: оси IFC, Z вверх, метры)
+    и `xform` (в осях и единицах сцены, по строкам: `hou.Matrix4(site["xform"])`), `origin` — её перенос.
+`d[]@ifc_facilities`:
+    Здания и сооружения (в IFC4X3 — мосты, дороги, ж/д, здания): то же плюс `class`, `parent_guid`,
+    `elevation_of_ref_height`, `elevation_of_terrain`.
+
+Геометрия элементов уже стоит в координатах проекта (вся цепочка размещений учтена); сдвиг карты
+к ней не применяется — координаты порядка миллионов метров во float32 Houdini потеряли бы точность.
+
+`4@global_xform`:
+    Матрица самого верхнего уровня размещения — корневой площадки (если площадок нет — корневого здания)
+    в осях и единицах сцены. `s@global_xform_source` говорит, чья это матрица.
+    Чтобы поставить модель к началу координат: нода __Transform By Attribute__, Attribute = `global_xform`,
+    включить __Invert Transformation__. Чтобы вернуть обратно — то же без Invert
+    (и снять __Delete Attribute__, если атрибут ещё понадобится: по умолчанию нода его удаляет).
+
+Move to Origin:
+    Если модель далеко от начала координат (например, «общие координаты» Revit — сотни километров),
+    ставить её к началу нодой Transform By Attribute уже поздно: позиции хранятся во float32, и на расстоянии
+    5 700 км шаг сетки float32 — полметра, стена толщиной 200 мм схлопывается в ноль ещё при импорте.
+    Переключатель __Move to Origin__ делает тот же перенос (обратный `global_xform`) в двойной точности
+    до записи позиций — геометрия приходит к началу координат точной. `global_xform` остаётся исходным,
+    так что Transform By Attribute без Invert возвращает модель на место; `i@ifc_moved_to_origin` = 1,
+    а `xform` площадок и зданий в detail описывают положение относительно перенесённой геометрии.
+"""
+
+
+HELP_EXPORT_EN = u"""= HIFC IFC Export =
+
+#type: node
+#context: sop
+#internal: hifc::ifc_export
+#icon: SOP/rop_geometry
+
+\"\"\"Writes the input geometry to IFC (IfcOpenShell, no Blender needed). The BIM structure is driven by primitive attributes.\"\"\"
+
+Press __Check Attributes__ before exporting: the node validates the attributes and writes a report to the Report tab without writing any file.
+Ready-made attribute template: __HIFC > Create Attribute Template__ (a Primitive Wrangle appended to the selected node).
+
+== How a BIM model is organised ==
+
+IFC is not a scene graph but a "what is inside what" tree:
+
+{{{
+IfcProject            <- Project parameter
+ └ IfcSite            <- Site parameter
+    └ IfcBuilding     <- Building parameter
+       └ IfcBuildingStorey          <- s@ifc_storey
+          └ IfcElementAssembly      <- intermediate segments of s@path
+             └ IfcElementAssembly
+                └ IfcMember / IfcLightFixture / ...   <- last segment of s@path
+}}}
+
+*Project, site and building* come from node parameters (Project tab).
+*Storey* comes from `s@ifc_storey`. *Everything below the storey* comes from `s@path`.
+
+== Main rule: one path = one physical element ==
+
+All primitives sharing the same `s@path` value are merged into *one* IFC element.
+
+* An element is something that is counted, ordered and installed as a separate piece: a profile, a hanger, a lamp, a bracket, a panel.
+* Do not put two physical pieces under one path: they become one line in the schedule.
+* Do not split one piece across several paths: it becomes several lines.
+* Need several colours inside one element? Give the primitives of one path different `Cd` values: you get one element with several styles.
+
+== s@path: hierarchy ==
+
+{{{
+/Frame_001/Frame_001_Profile/Profile_0007
+ │          │                 └ element (IfcMember)
+ │          └ group   -> IfcElementAssembly
+ └ system             -> IfcElementAssembly
+}}}
+
+* Separator is `/`. The leading `/` is optional.
+* Every intermediate segment is an assembly (`Assembly Class` on the Structure tab, IfcElementAssembly by default). Equal prefixes are the same assembly.
+* A path cannot be both an element and a folder: `/A/B` together with `/A/B/C` is an error.
+* Segment names: Latin letters, digits, `_`, `-`, `.`, space. Names must be unique among siblings.
+* *Names must be stable.* When no GUID is given, it is derived from path + storey: the same path gives the same GlobalId on every export. Do not use `@primnum` or random numbers in the path, or the BIM coordinator receives "new" elements on every export.
+* 2 to 4 levels deep is normal. Avoid single-element assemblies unless they mean something.
+* __Skip Leading Segments__ strips the beginning of the path (for example a technical `/obj/geo1`).
+
+== Element class ==
+
+The class is resolved in this order:
+# `s@ifc_class` on the primitive;
+# the first matching __Class Rules__ entry (glob on the element name or the full path, for example `Bracket_*`);
+# __Default Class__ (IfcBuildingElementProxy).
+
+`s@ifc_predefined` refines the class (PredefinedType) and must be a value of that class's enumeration.
+An unknown value becomes USERDEFINED and the text goes to ObjectType. If unsure, use `NOTDEFINED`.
+
+Common classes:
+
+`IfcMember` / `MEMBER`, `STRUT`, `BRACE`, `MULLION`:
+    Profiles, rods, battens, ties.
+`IfcBeam` / `BEAM`, `JOIST`, `LINTEL`:
+    Beams, purlins.
+`IfcColumn` / `COLUMN`, `PILASTER`:
+    Columns, posts.
+`IfcPlate` / `SHEET`, `CURTAIN_PANEL`:
+    Sheets, panels.
+`IfcSlab` / `FLOOR`, `ROOF`, `LANDING`:
+    Slabs.
+`IfcWall` / `STANDARD`, `PARTITIONING`:
+    Walls, partitions.
+`IfcCovering` / `CEILING`, `CLADDING`, `FLOORING`:
+    Finishes, suspended ceilings.
+`IfcRailing` / `HANDRAIL`, `GUARDRAIL`:
+    Railings.
+`IfcDiscreteAccessory` / `BRACKET`, `SHOE`, `NOTDEFINED`:
+    Hangers, brackets, embeds.
+`IfcFastener` / `WELD`, `GLUE`; `IfcMechanicalFastener` / `BOLT`, `ANCHORBOLT`:
+    Fasteners.
+`IfcLightFixture` / `POINTSOURCE`, `DIRECTIONSOURCE`, `NOTDEFINED`:
+    Luminaires, light tubes.
+`IfcCableCarrierSegment` / `CABLETRAYSEGMENT`, `CONDUITSEGMENT`:
+    Cable trays, conduits.
+`IfcPipeSegment` / `RIGIDSEGMENT`:
+    Pipes (building services, not decorative tubes).
+`IfcFurniture` / `TABLE`, `CHAIR`, `SHELF`:
+    Furniture.
+`IfcAnnotation`:
+    Labels and tags without physical volume.
+`IfcBuildingElementProxy`:
+    Anything without a fitting class. An honest proxy is better than a wrong class.
+
+Schemas: IFC4 is the default (Revit, Archicad, Bonsai, Navisworks). IFC4X3 is for infrastructure (IfcCourse, IfcTrackElement...). IFC2X3 only for legacy software; some classes are missing there (IfcPipeSegment becomes a proxy).
+
+== Names and marks ==
+
+`s@ifc_name`:
+    Name, shown in the BIM tree. Defaults to the last path segment.
+`s@ifc_tag`:
+    Tag, the drawing mark / position (for example `F-01.P-007`).
+`s@ifc_object_type`:
+    ObjectType, your type / article code (Profile_40x40, Lamp_1500).
+`s@ifc_description`:
+    Description, free text.
+
+== Storey ==
+
+`s@ifc_storey` is the storey name (`Level 01`, `+3.600`). All elements with the same value go into one IfcBuildingStorey.
+Empty means __Default Storey__. Assemblies are built per storey: the same path prefix on different storeys gives different assemblies.
+
+== Material and colour ==
+
+`s@ifc_material`:
+    Material name (IfcMaterial). Equal names share one material in the project. Use real materials: `Aluminium`, `Steel S235`, `Polycarbonate`.
+`s[]@ifc_materials`:
+    Several materials of one element (e.g. a window: `Glass`, `Wood`) -> IfcMaterialConstituentSet (IfcMaterialList in IFC2X3). Takes priority over `s@ifc_material`. Layers and thicknesses are not transferred.
+`Cd` (prim or point), `f@Alpha`:
+    Colour and transparency -> IfcSurfaceStyle. Equal colours share one style.
+`s@ifc_style`:
+    Style name (otherwise `Color_RRGGBB` is generated).
+__Packed Colors__:
+    For packed primitives: *Per Face* uses the face colours stored inside (import results are kept as is); *Override* uses `Cd`/`Alpha` of the packed primitive for the whole element.
+
+== Properties (property sets) ==
+
+The main way is the `d@ifc_psets` dictionary `{SetName: {Property: value}}`:
+
+{{{
+#!vex
+dict data;   data["Length_mm"] = 1500;  data["SystemID"] = 1;
+dict common; common["IsExternal"] = 0;  common["LoadBearing"] = 0;
+dict qto;    qto["Length"] = 1500;
+dict ps;
+ps["ACME_Data"]                = data;    // your own set
+ps["Pset_MemberCommon"]        = common;  // standard buildingSMART set
+ps["Qto_MemberBaseQuantities"] = qto;     // quantities
+d@ifc_psets = ps;
+}}}
+
+* `Pset_...` sets are standard: their properties are typed from the buildingSMART templates (0/1 becomes Boolean automatically). *Do not name your own sets `Pset_...`*: use a project prefix (`ACME_Data`, `ACME_Common`).
+* `Qto_...` sets with numeric values are written as IfcElementQuantity (quantities for cost estimates).
+* *Units:* numbers in `d@ifc_psets` are written as is, in IFC project units (Length Unit parameter, *millimetres* by default). Multiply Houdini metres by 1000.
+* *Values with units: `d@ifc_measures`*, `{SetName: {Property: "LENGTH" | "AREA" | "VOLUME"}}`. Values marked this way are in SI (m, m², m³) and are converted to the file units automatically, with the proper IFC type (IfcLengthMeasure etc.). HIFC IFC Import fills this attribute, so import -> export keeps quantities correct when units change.
+* __Property Sets to Export__ selects which sets from the dictionary are written (globs, `^glob` excludes): vendor sets you do not need slow down large exports noticeably.
+* Quick way without a dictionary: list attributes in __Attributes to Pset__ (globs such as `len_* N_*`); they go to the __Pset Name__ set (HoudiniAttributes).
+* __Add Houdini_Path Property__ adds the source path to that set, handy for tracing back.
+
+== GUID ==
+
+`s@ifc_guid` is a 22-character IFC GlobalId (for example kept from an import). If present and valid it is used as is.
+Otherwise the GUID is derived from path + storey + __GUID Seed__ and stays stable between exports. Change the GUID Seed only to deliberately re-issue all elements.
+
+== Geometry ==
+
+* Polygons only. Packed primitives are unpacked automatically; curves, points and volumes are skipped.
+* Closed shells with outward normals (Houdini default). Avoid degenerate polygons.
+* Scene units are metres (Scene Unit parameter), Y up (converted to Z up).
+* Keep polygon counts sensible: IFC is not a render. 12 to 16 segments are enough for a cylinder.
+* The element insertion point is the bottom centre of its bounding box (__Element Origin__).
+
+== Checklist before export ==
+
+# `s@path` on every primitive; one path = one piece.
+# Class from `s@ifc_class` or Class Rules; no unnecessary proxies.
+# `s@ifc_storey` set (or Default Storey is fine).
+# `s@ifc_material` and `Cd` set per category.
+# Properties in `d@ifc_psets`, own sets not named `Pset_`, lengths in mm.
+# __Check Attributes__ without errors -> __Export IFC__ -> turn on __Validate After Export__.
+# Open the file in Bonsai / BIMvision and review the tree.
+
+@parameters
+
+== Buttons ==
+
+Export IFC:
+    Write the file.
+Check Attributes:
+    Validate attributes and show a report (no file is written).
+
+== Project ==
+
+Schema:
+    IFC4 (recommended), IFC4X3, IFC2X3.
+Length Unit:
+    Length unit of the file (mm by default). Property lengths use it too.
+Scene Unit:
+    Metres per Houdini unit (1 = metres).
+GUID Seed:
+    Extra key for GUID generation.
+
+== Structure ==
+
+Path Attribute:
+    String prim attribute with the hierarchy.
+Skip Leading Segments:
+    Drop the first N path segments.
+Class Rules:
+    Glob -> class -> PredefinedType, used when `s@ifc_class` is missing.
+
+== Attributes ==
+
+Names of the attributes that provide class, type, name, tag, GUID, storey, material, style and the property dictionary.
+"""
+
+HELP_IMPORT_EN = u"""= HIFC IFC Import =
+
+#type: node
+#context: sop
+#internal: hifc::ifc_import
+#icon: SOP/file
+
+\"\"\"Reads IFC with IfcOpenShell. One element = one packed primitive (or a set of triangles).\"\"\"
+
+The output carries the same attributes that HIFC IFC Export understands, so import -> edit -> export keeps the structure and the GlobalIds.
+
+@parameters
+
+IFC File:
+    IFC2X3 / IFC4 / IFC4X3 file.
+Output:
+    *Auto* (default) — geometry that repeats in the model (identical windows, doors, furniture) is stored once and placed as packed copies using the transforms from IFC, everything else becomes plain polygons: both memory and the viewport stay light. *Packed Primitive per Element* — one packed primitive per element (like objects in Bonsai). *Polygons* — one flat mesh.
+Instance From N Copies:
+    How many identical elements it takes before their geometry is stored once (default 2).
+Path:
+    "From First Assembly" gives paths from the first assembly (for re-export); "Full" starts at IfcProject.
+Include / Exclude Classes:
+    Space-separated class filter.
+Property Sets:
+    Which property/quantity sets to read (globs, `^glob` excludes), e.g. `Pset_* Qto_*` or `* ^ArchiCADProperties`. Reading properties is the slowest part of import: fewer sets = faster.
+Disk Cache:
+    Parsed elements are stored in `$HOUDINI_TEMP_DIR/hifc_cache`; re-opening the same unchanged file is almost instant, also in a new session. __Clear Disk Cache__ empties it.
+
+@attributes
+
+`path`, `ifc_guid`, `ifc_class`, `ifc_predefined`, `ifc_name`, `ifc_tag`, `ifc_object_type`, `ifc_description`,
+`ifc_storey`, `ifc_type`, `ifc_material`, `s[]@ifc_materials`, `ifc_style`, `ifc_id`, `d@ifc_psets`, `d@ifc_measures`, `Cd`, `Alpha`.
+
+Primitive groups: `ifc_packed` — packed copies of repeated geometry, `ifc_polygons` — plain polygons.
+One Blast or Delete on a group separates the instances from the rest of the model.
+
+@properties Which IFC properties are imported
+
+Imported: `IfcPropertySingleValue`, `IfcPropertyEnumeratedValue`, `IfcPropertyListValue`,
+`IfcPropertyBoundedValue` (as `lower..upper`) and the quantities of `IfcElementQuantity`.
+`IfcComplexProperty` is flattened: a property `Child` inside `Nested` becomes `Nested.Child`
+(export writes it back with that name as an ordinary property; the nesting is not restored).
+
+Not imported: `IfcPropertyTableValue`, `IfcPropertyReferenceValue` and other types whose value is a table or a
+reference rather than a single value. They stay in the source file and are not written on export; the node
+reports them with a warning and stores it in the `ifc_warnings` detail attribute.
+
+@detail Top levels of the file (detail attributes)
+
+Import puts into detail where the model sits in the world and how its sites and buildings are placed.
+All lengths are in metres.
+
+`s@ifc_crs`:
+    Name of the map coordinate system, e.g. `EPSG:32760`. Empty if the file is not georeferenced.
+`d@ifc_georef`:
+    Project georeference: `map_conversion` (Eastings, Northings, OrthogonalHeight, XAxisAbscissa/Ordinate, Scale as in
+    the file, plus `map_origin_m`, the model origin in map metres), `map_rotation_deg` (project X axis from map east,
+    counter-clockwise), `crs` (name, datum, map unit), `true_north` and `true_north_deg`, `wcs_matrix`, `precision`,
+    `length_unit_m`. IFC4/IFC4X3 read `IfcMapConversion` + `IfcProjectedCRS`; IFC2X3 reads the
+    `ePSet_MapConversion` / `ePSet_ProjectedCRS` property sets (buildingSMART convention).
+`d@ifc_project`:
+    Project name, GUID, phase and unit scales (`units`).
+`d[]@ifc_sites`:
+    Sites: name, GUID, `latitude`/`longitude` (decimal degrees), `ref_elevation`, `land_title_number`, `address`,
+    `psets`, and two placement matrices — `ifc_matrix` (as in the file: IFC axes, Z up, metres) and `xform`
+    (scene axes and units, row-major: `hou.Matrix4(site["xform"])`); `origin` is its translation.
+`d[]@ifc_facilities`:
+    Buildings and facilities (bridges, roads, railways in IFC4X3): the same plus `class`, `parent_guid`,
+    `elevation_of_ref_height`, `elevation_of_terrain`.
+
+Element geometry is already in project coordinates (the whole placement chain is applied). The map offset is not
+applied to it: coordinates in the millions of metres would lose precision in Houdini's float32.
+
+`4@global_xform`:
+    The matrix of the top placement level — the root site (or the root building if there is no site) — in scene
+    axes and units. `s@global_xform_source` names the object it comes from.
+    To bring the model to the origin: __Transform By Attribute__, Attribute = `global_xform`, turn on
+    __Invert Transformation__. To put it back, the same without Invert (and turn off __Delete Attribute__ if you
+    still need the attribute: the node deletes it by default).
+
+Move to Origin:
+    If the model is far from the origin (e.g. Revit shared coordinates, hundreds of kilometres away), moving it with
+    Transform By Attribute after import is too late: positions are stored in float32, and 5,700 km away the float32
+    step is half a metre — a 200 mm wall collapses to zero thickness during import. __Move to Origin__ does the same
+    move (the inverse of `global_xform`) in double precision before positions are stored, so the geometry arrives at
+    the origin intact. `global_xform` keeps the original placement, so Transform By Attribute without Invert puts the
+    model back; `i@ifc_moved_to_origin` is 1, and the site/facility `xform` in detail describe placement relative to
+    the moved geometry.
+"""
+
+
+def _ru_block(ru):
+    """Русская страница как подраздел английской: без заголовка страницы и без @-секций."""
+    titles = {"parameters": "Параметры", "attributes": "Атрибуты", "properties": "Свойства",
+              "detail": "Detail-атрибуты", "examples": "Примеры"}
+    out, started = [], False
+    for ln in ru.splitlines():
+        if not started:
+            # шапка страницы: заголовок «= ... =», строки #type/#context/#internal/#icon и пустые
+            if not ln.strip() or ln.startswith("=") or ln.startswith("#"):
+                continue
+            started = True
+        if ln.startswith("@"):
+            word, _, rest = ln[1:].partition(" ")
+            out += ["", "=== %s ===" % (rest.strip() or titles.get(word, word.title())), ""]
+            continue
+        if ln.startswith("== ") and ln.rstrip().endswith(" =="):
+            ln = "=" + ln.rstrip() + "="           # на уровень ниже английских разделов
+        out.append(ln.replace('"""', ""))
+    return "\n".join(out).strip()
+
+
+def _merge(en, ru):
+    """Одна страница справки с обоими языками: HDA одинаковы в репозитории и в установке."""
+    return "%s\n\n== Справка по-русски ==\n\n%s\n" % (en.rstrip(), _ru_block(ru))
+
+
+# справка двуязычная: английский текст, следом тот же раздел по-русски (переменная HIFC_HELP_LANG больше не нужна)
+HELP_EXPORT = _merge(HELP_EXPORT_EN, HELP_EXPORT_RU)
+HELP_IMPORT = _merge(HELP_IMPORT_EN, HELP_IMPORT_RU)

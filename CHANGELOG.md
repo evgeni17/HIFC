@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.6.0-dev.3 — 2026-10-07
+Versioned, frozen assets — existing scenes keep the exact code they were built against:
+* **The current code is frozen as `::1.0`.** `freeze.py 1.0` copied the package to `python3.13libs/hifc_1_0`
+  (`FROZEN = True`), and the `hifc::ifc_import::1.0` / `hifc::ifc_export::1.0` assets were rebuilt from that copy:
+  every button and the cook stub inside them import `hifc_1_0`, never the package that keeps changing.
+  `freeze.py --seal 1.0` wrote `FROZEN.sha256` (package files and both HDAs) and the frozen record in
+  `VERSIONS.json`. A frozen copy is never edited again; a fix for old scenes is a new asset version.
+* **Development moved to `::6.0`** (`freeze.py --next 6.0`), matching the release rule 0.N -> `::N.0`.
+  HDA files now carry the version in their name (`otls/hifc_ifc_import_6.0.hda`), so versions live side by side;
+  `build_all` refuses to rebuild a frozen package without `force=True`.
+* **Dependencies across versions.** IfcOpenShell is one library per Houdini session, so each asset version records
+  the set it was verified with (`vendor`, plus `also_tested` for later sets); `tests/test_frozen.py` checks that the
+  installed set is among them, and the nodes already warn when the installed modules differ from the pinned ones.
+* **New `tests/hip_compat.py`**: builds a scene with nodes of every installed asset version, checks which package
+  each one calls, exports from both, saves the scene, and reopens it in a **separate process** to compare
+  parameters, geometry, attributes, GUIDs, property sets and the export — nodes stay on their own version, nothing
+  upgrades itself. New `tests/test_frozen.py`: checksums, no leaks from a frozen copy to the development package,
+  complete `VERSIONS.json`, development version ahead of every frozen one.
+
 ## 0.6.0-dev.2 — 2026-10-07
 Two gaps found in review, both with tests that fail without the fix:
 * `deploy.py` no longer forgets a stale file it could not delete: unremoved files stay in `INSTALL.json` as

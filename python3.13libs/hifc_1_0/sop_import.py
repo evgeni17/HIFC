@@ -1,0 +1,526 @@
+# SPDX-FileCopyrightText: 2026 EOK
+# SPDX-License-Identifier: Apache-2.0
+"""SOP-слой импорта: IFC -> геометрия Houdini.
+
+Вызывается из Python SOP внутри HDA hifc::ifc_import:
+    import hifc_1_0.sop_import as m; m.cook(hou.pwd())
+Параметры читаются с HDA (родителя Python SOP) или с самого узла, если он используется напрямую.
+"""
+import json
+import os
+import re
+
+import hou
+import numpy as np
+
+from . import ensure_vendor_path
+
+ensure_vendor_path()
+
+# кэш прочитанных файлов: ключ -> список записей (переживает перекуки)
+_CACHE = {}
+_CACHE_MAX = 3
+# формат записей элемента: менять при изменении состава rec (иначе старый кэш отдаст записи без новых полей)
+_REC_FORMAT = 4
+
+
+def _owner(node):
+    """Узел, на котором висят параметры (HDA или сам Python SOP)."""
+    p = node.parent()
+    if p is not None and p.type().name().startswith("hifc::ifc_import"):
+        return p
+    return node
+
+
+def _ev(owner, name, default):
+    p = owner.parm(name)
+    if p is None:
+        return default
+    try:
+        return p.evalAsString() if isinstance(default, str) else type(default)(p.eval())
+    except Exception:
+        return default
+
+
+def _classes(s):
+    return [c for c in re.split(r"[\s,;]+", s or "") if c]
+
+
+def clear_cache(kwargs=None):
+    _CACHE.clear()
+    if kwargs and kwargs.get("node") is not None:
+        n = kwargs["node"]
+        inner = n.node("IFC_READ") or n
+        inner.cook(force=True)
+
+
+def _cache_file(key):
+    import hashlib
+    d = os.path.join(hou.text.expandString("$HOUDINI_TEMP_DIR"), "hifc_cache")
+    return os.path.join(d, hashlib.sha1(repr(key).encode("utf-8")).hexdigest() + ".pkl")
+
+
+def _load(path, include, exclude, path_mode, psets, threads, pset_names=None, disk_cache=True):
+    """(записи элементов, сводка чтения): кэш в памяти -> дисковый кэш -> чтение IFC.
+
+    Сводка (stats) кэшируется вместе с записями, иначе после кэша пропадали бы предупреждения.
+    """
+    import pickle
+    from . import __version__, ifc_read
+
+    st = os.stat(path)
+    key = (__version__, _REC_FORMAT, path, st.st_mtime, st.st_size, tuple(include), tuple(exclude), path_mode, psets,
+           tuple(pset_names or ()))
+    cached = _CACHE.get(key)
+    if cached is None and disk_cache:
+        cf = _cache_file(key)
+        if os.path.exists(cf):
+            try:
+                with open(cf, "rb") as fh:
+                    cached = pickle.load(fh)
+            except Exception:
+                cached = None
+    if cached is None:
+        stats = {}
+        with hou.InterruptableOperation("HIFC: reading IFC", open_interrupt_dialog=True) as op:
+            def progress(i, n):
+                op.updateProgress(min(1.0, float(i) / max(1, n)))
+            recs = ifc_read.uniquify_paths(list(ifc_read.iter_ifc(
+                path, include=include or None, exclude=exclude, path_mode=path_mode,
+                psets=psets, threads=threads, progress=progress, pset_names=pset_names, stats=stats)))
+        cached = (recs, stats)
+        if disk_cache:
+            try:
+                cf = _cache_file(key)
+                os.makedirs(os.path.dirname(cf), exist_ok=True)
+                with open(cf + ".tmp", "wb") as fh:
+                    pickle.dump(cached, fh, protocol=pickle.HIGHEST_PROTOCOL)
+                os.replace(cf + ".tmp", cf)
+            except Exception:
+                pass
+    if len(_CACHE) >= _CACHE_MAX and key not in _CACHE:
+        _CACHE.pop(next(iter(_CACHE)))
+    _CACHE[key] = cached
+    return cached
+
+
+def clear_disk_cache(kwargs=None):
+    import shutil
+    d = os.path.join(hou.text.expandString("$HOUDINI_TEMP_DIR"), "hifc_cache")
+    shutil.rmtree(d, ignore_errors=True)
+    _CACHE.clear()
+    if kwargs and kwargs.get("node") is not None:
+        inner = kwargs["node"].node("IFC_READ") or kwargs["node"]
+        inner.cook(force=True)
+
+
+def _to_houdini(v, y_up, scale):
+    """IFC (Z вверх, метры) -> Houdini (Y вверх, единицы сцены)."""
+    v = np.asarray(v, dtype=np.float64)
+    if y_up:
+        v = np.column_stack((v[:, 0], v[:, 2], -v[:, 1]))
+    return v * scale
+
+
+def _face_colors(rec):
+    """Цвет (RGBA) каждого треугольника."""
+    fs = rec["face_style"]
+    styles = rec["styles"]
+    pal = np.array([s[1] for s in styles] + [(0.8, 0.8, 0.8, 1.0)], dtype=np.float32)
+    idx = np.where((fs >= 0) & (fs < len(styles)), fs, len(styles))
+    return pal[idx]
+
+
+def _face_style_names(rec):
+    names = [s[0] for s in rec["styles"]] + [""]
+    fs = rec["face_style"]
+    return [names[i] if 0 <= i < len(rec["styles"]) else "" for i in fs]
+
+
+def _build_mesh(geo, verts, faces):
+    """Быстрое создание треугольников: точки + P одним буфером, затем полигоны."""
+    n = len(verts)
+    if n == 0 or len(faces) == 0:
+        return 0
+    base = geo.intrinsicValue("pointcount")
+    pts = geo.createPoints([(0.0, 0.0, 0.0)] * n)
+    if base == 0:
+        geo.setPointFloatAttribValuesFromString("P", np.ascontiguousarray(verts, dtype=np.float32).tobytes())
+    else:
+        for p, xyz in zip(pts, verts.tolist()):
+            p.setPosition(xyz)
+    # Houdini: лицевая сторона — по часовой, IFC — против: разворачиваем порядок
+    polys = (faces[:, ::-1] + base).tolist()
+    geo.createPolygons(polys)
+    return len(faces)
+
+
+def _prim_string_attr(geo, name, values):
+    if geo.findPrimAttrib(name) is None:
+        geo.addAttrib(hou.attribType.Prim, name, "")
+    geo.setPrimStringAttribValues(name, values)
+
+
+def _prim_int_attr(geo, name, values):
+    if geo.findPrimAttrib(name) is None:
+        geo.addAttrib(hou.attribType.Prim, name, 0)
+    geo.setPrimIntAttribValuesFromString(name, np.asarray(values, dtype=np.int32).tobytes())
+
+
+def _prim_float_attr(geo, name, values, size=1, default=0.0):
+    if geo.findPrimAttrib(name) is None:
+        geo.addAttrib(hou.attribType.Prim, name, (default,) * size if size > 1 else default)
+    geo.setPrimFloatAttribValuesFromString(name, np.asarray(values, dtype=np.float32).tobytes())
+
+
+def _prim_dict_attr(geo, name, values):
+    if geo.findPrimAttrib(name) is None:
+        geo.addAttrib(hou.attribType.Prim, name, {})
+    setter = getattr(geo, "setPrimDictAttribValues", None)
+    if setter is not None:
+        try:
+            setter(name, values)
+            return
+        except Exception:
+            pass
+    for prim, v in zip(geo.prims(), values):
+        prim.setAttribValue(name, v)
+
+
+def _flat_name(pset, prop):
+    s = re.sub(r"[^A-Za-z0-9_]", "_", "%s_%s" % (pset, prop))
+    return ("_" + s) if s[:1].isdigit() else s
+
+
+# группы примитивов на выходе импорта
+GROUP_PACKED = "ifc_packed"
+GROUP_POLYS = "ifc_polygons"
+
+REC_STR_ATTRS = (
+    ("path", "path"), ("ifc_guid", "guid"), ("ifc_class", "ifc_class"), ("ifc_predefined", "predefined"),
+    ("ifc_name", "name"), ("ifc_storey", "storey"), ("ifc_type", "type_name"),
+    ("ifc_object_type", "object_type"), ("ifc_tag", "tag"), ("ifc_description", "description"),
+)
+
+
+def _prim_string_array_attr(geo, name, values):
+    """Строковый массив на примитив (s[]@...)."""
+    if geo.findPrimAttrib(name) is None:
+        geo.addArrayAttrib(hou.attribType.Prim, name, hou.attribData.String)
+    for prim, v in zip(geo.iterPrims(), values):
+        prim.setAttribValue(name, tuple(v))
+
+
+def cook(node):
+    owner = _owner(node)
+    geo = node.geometry()
+    geo.clear()
+    path = _ev(owner, "file", "")
+    if not path:
+        return
+    path = hou.text.expandString(path)
+    if not os.path.isfile(path):
+        raise hou.NodeError("IFC file not found: %s" % path)
+
+    include = _classes(_ev(owner, "include", ""))
+    exclude = _classes(_ev(owner, "exclude", "IfcOpeningElement IfcSpace IfcVirtualElement"))
+    path_mode = "full" if _ev(owner, "pathmode", 0) == 1 else "elements"
+    mode = int(_ev(owner, "output", 0))  # 0 packed, 1 polygons, 2 auto
+    y_up = bool(_ev(owner, "yup", 1))
+    scale = float(_ev(owner, "scale", 1.0))
+    want_psets = bool(_ev(owner, "psets", 1))
+    flatten = bool(_ev(owner, "flatten", 0))
+    want_color = bool(_ev(owner, "color", 1))
+    threads = int(_ev(owner, "threads", 0))
+
+    pset_names = [p for p in re.split(r"[\s,;]+", _ev(owner, "psetfilter", "*")) if p]
+    if pset_names == ["*"]:
+        pset_names = None
+    disk_cache = bool(_ev(owner, "diskcache", 1))
+    min_copies = max(2, int(_ev(owner, "mincopies", 2)))
+    recs, stats = _load(path, include, exclude, path_mode, want_psets, threads, pset_names, disk_cache)
+
+    # верхний уровень размещения (корневая площадка) -> 4@global_xform;
+    # Move to Origin: переносим модель в двойной точности ДО записи во float32 P
+    from . import ifc_read
+    top_m, top_src = ifc_read.top_placement((stats or {}).get("context"))
+    to_origin = bool(_ev(owner, "toorigin", 0)) and top_m is not None
+    if to_origin:
+        inv = np.linalg.inv(top_m)
+        # записи из кэша не трогаем: копия с новой матрицей (дёшево — 4x4 на элемент)
+        recs = [dict(r, matrix=inv @ np.asarray(r["matrix"], dtype=np.float64)) if r.get("matrix") is not None else r
+                for r in recs]
+
+    # повторяющаяся геометрия (одинаковый geom_id от IfcOpenShell: окна, двери, мебель)
+    counts = {}
+    for r in recs:
+        gid = r.get("geom_id")
+        counts[gid] = counts.get(gid, 0) + 1
+    instanced = {gid for gid, c in counts.items() if gid is not None and c >= min_copies}
+
+    if mode == 2:      # Auto: копии — packed-инстансы, остальное — обычные полигоны
+        groups = [([r for r in recs if r.get("geom_id") not in instanced], True),
+                  ([r for r in recs if r.get("geom_id") in instanced], False)]
+    elif mode == 1:    # Polygons
+        groups, instanced = [(recs, True)], set()
+    else:              # Packed
+        groups = [(recs, False)]
+
+    unpack = hou.sopNodeTypeCategory().nodeVerbs()["unpack"]
+    # цвет packed-примитива (первая грань) не должен затирать цвета граней внутри;
+    # группы переносим, чтобы ifc_polygons дошла до распакованных треугольников
+    unpack.setParms({"transfer_attributes": "* ^Cd ^Alpha ^ifc_style", "transfer_groups": "*"})
+    single = len([g for g in groups if g[0]]) == 1
+    n_inst = 0
+    for part, to_polys in groups:
+        if not part:
+            continue
+        direct = single and not to_polys
+        pk = geo if direct else hou.Geometry()
+        _cook_packed(pk, part, y_up, scale, want_color, instanced)
+        _set_element_attribs(pk, part, want_psets, flatten)
+        # группы примитивов: быстро отделить инстансы от обычной геометрии
+        pk.createPrimGroup(GROUP_POLYS if to_polys else GROUP_PACKED).add(pk.prims())
+        if to_polys:
+            if single:
+                unpack.execute(geo, [pk])
+            else:
+                tmp = hou.Geometry()
+                unpack.execute(tmp, [pk])
+                geo.merge(tmp)
+        elif not direct:
+            geo.merge(pk)
+            n_inst += len(part)
+
+    # сводка в detail-атрибутах
+    geo.addAttrib(hou.attribType.Global, "ifc_file", "")
+    geo.setGlobalAttribValue("ifc_file", path)
+    geo.addAttrib(hou.attribType.Global, "ifc_elements", 0)
+    geo.setGlobalAttribValue("ifc_elements", len(recs))
+    _write_context(geo, (stats or {}).get("context"), y_up, scale, np.linalg.inv(top_m) if to_origin else None)
+    _write_global_xform(geo, top_m, top_src, y_up, scale, to_origin)
+    warn = warning_text(stats)
+    geo.addAttrib(hou.attribType.Global, "ifc_warnings", "")
+    if warn:
+        geo.setGlobalAttribValue("ifc_warnings", warn)
+        # предупреждение ноды: геометрия уже построена, кук на этом заканчивается
+        raise hou.NodeWarning(warn)
+
+
+def _clean(v):
+    """Значение для dict-атрибута Houdini: без None, numpy -> python, ключи — строки."""
+    if isinstance(v, dict):
+        return {str(k): _clean(x) for k, x in v.items() if x is not None}
+    if isinstance(v, (list, tuple)):
+        return [_clean(x) for x in v if x is not None]
+    if isinstance(v, np.generic):
+        return v.item()
+    return v
+
+
+def _detail_dict(geo, name, value):
+    if geo.findGlobalAttrib(name) is None:
+        geo.addAttrib(hou.attribType.Global, name, {})
+    geo.setGlobalAttribValue(name, _clean(value))
+
+
+def _detail_dict_array(geo, name, values):
+    if geo.findGlobalAttrib(name) is None:
+        geo.addArrayAttrib(hou.attribType.Global, name, hou.attribData.Dict)
+    geo.setGlobalAttribValue(name, [_clean(v) for v in values])
+
+
+def _hou_xform(ifc_matrix, y_up, scale):
+    """Матрица IFC (4x4, метры, столбцовые векторы) -> hou.Matrix4 по строкам (осями и единицами сцены)."""
+    A, b = _hou_placement(np.asarray(ifc_matrix, dtype=np.float64).reshape(4, 4), y_up, scale)
+    M = np.eye(4)
+    M[:3, :3] = A.T      # Houdini: вектор-строка, перенос в последней строке
+    M[3, :3] = b
+    return [float(x) for x in M.reshape(16)], [float(x) for x in b]
+
+
+def _write_global_xform(geo, top_m, top_src, y_up, scale, moved):
+    """4@global_xform — размещение самого верхнего уровня (корневой площадки) в осях и единицах сцены.
+
+    Transform By Attribute (Attribute = global_xform, Invert Transformation) ставит модель к началу координат.
+    Точные значения (double) — в d[]@ifc_sites / d@ifc_georef; сам атрибут, как и P, во float32.
+    """
+    vals = _hou_xform(top_m, y_up, scale)[0] if top_m is not None else [float(x) for x in np.eye(4).reshape(16)]
+    if geo.findGlobalAttrib("global_xform") is None:
+        geo.addAttrib(hou.attribType.Global, "global_xform", tuple([0.0] * 16))
+    geo.setGlobalAttribValue("global_xform", tuple(vals))
+    try:
+        geo.findGlobalAttrib("global_xform").setOption("type", "matrix")   # typeinfo: матрица
+    except Exception:
+        pass
+    geo.addAttrib(hou.attribType.Global, "global_xform_source", "")
+    geo.setGlobalAttribValue("global_xform_source", top_src or "none")
+    geo.addAttrib(hou.attribType.Global, "ifc_moved_to_origin", 0)
+    geo.setGlobalAttribValue("ifc_moved_to_origin", 1 if moved else 0)
+
+
+def _write_context(geo, ctx, y_up, scale, rebase=None):
+    """Верхние уровни файла в detail: геопривязка проекта, площадки, здания/сооружения.
+
+    У площадок и зданий два вида матрицы: "ifc_matrix" — как в файле (метры, оси IFC, Z вверх),
+    "xform" — в осях и единицах сцены, готова для hou.Matrix4(...) (и "origin" — её перенос).
+    rebase — обратная матрица верхнего уровня при Move to Origin: тогда "xform" описывает положение
+    относительно уже перенесённой геометрии этой ноды, а "ifc_matrix" остаётся как в файле.
+    """
+    geo.addAttrib(hou.attribType.Global, "ifc_crs", "")
+    if not ctx:
+        return
+    georef = ctx.get("georef") or {}
+    geo.setGlobalAttribValue("ifc_crs", str((georef.get("crs") or {}).get("Name", "") or ""))
+    _detail_dict(geo, "ifc_project", dict(ctx.get("project") or {}, units=ctx.get("units") or {}))
+    _detail_dict(geo, "ifc_georef", georef)
+    for name, key in (("ifc_sites", "sites"), ("ifc_facilities", "facilities")):
+        items = []
+        for it in ctx.get(key) or ():
+            d = dict(it)
+            d["ifc_matrix"] = d.pop("matrix")
+            m = np.asarray(d["ifc_matrix"], dtype=np.float64).reshape(4, 4)
+            if rebase is not None:
+                m = rebase @ m
+            d["xform"], d["origin"] = _hou_xform(m, y_up, scale)
+            items.append(d)
+        _detail_dict_array(geo, name, items)
+
+
+def warning_text(stats):
+    """Все предупреждения ноды одним текстом: Python SOP показывает только последнее."""
+    parts = []
+    sk = (stats or {}).get("skipped_properties") or {}
+    if sk:
+        items = ", ".join("%s x%d" % kv for kv in sorted(sk.items()))
+        parts.append("Some IFC properties are not imported as attributes: %s. "
+                     "These property types hold tables or references, not a single value; "
+                     "they stay in the source file and are not written back on export." % items)
+    parts.extend(vendor_warnings())
+    return "\n\n".join(parts)
+
+
+def vendor_warnings():
+    """Версии модулей в vendor/ отличаются от закреплённых — результат может отличаться от проверенного."""
+    try:
+        from . import deps
+        bad = deps.version_mismatches()
+    except Exception:
+        return []
+    if not bad:
+        return []
+    return ["Vendor modules differ from the versions this plugin was tested with: %s. "
+            "Run HIFC > Install / Update ifcopenshell to get the pinned versions." % ", ".join(bad)]
+
+
+def _flatten_psets(geo, recs, rep):
+    cols = {}
+    for i, r in enumerate(recs):
+        for pn, props in r["psets"].items():
+            for k, v in props.items():
+                cols.setdefault(_flat_name(pn, k), {})[i] = v
+    for name, vals in cols.items():
+        sample = next(iter(vals.values()))
+        if isinstance(sample, (int, float, bool)) and all(isinstance(v, (int, float, bool)) or v is None for v in vals.values()):
+            _prim_float_attr(geo, name, rep([float(vals.get(i) or 0.0) for i in range(len(recs))]))
+        else:
+            _prim_string_attr(geo, name, rep(["" if vals.get(i) is None else str(vals.get(i)) for i in range(len(recs))]))
+
+
+def _set_element_attribs(pk, recs, want_psets, flatten):
+    """Атрибуты элементов — по одному значению на packed-примитив."""
+    for attr, key in REC_STR_ATTRS:
+        _prim_string_attr(pk, attr, [r[key] for r in recs])
+    _prim_int_attr(pk, "ifc_id", [r["id"] for r in recs])
+    # один материал -> s@ifc_material; полный список (наборы материалов) -> s[]@ifc_materials
+    _prim_string_attr(pk, "ifc_material", [r["materials"][0] if len(r["materials"]) == 1 else "" for r in recs])
+    if any(len(r["materials"]) > 1 for r in recs):
+        _prim_string_array_attr(pk, "ifc_materials", [r["materials"] for r in recs])
+    if want_psets:
+        _prim_dict_attr(pk, "ifc_psets", [r["psets"] for r in recs])
+        # какие свойства — длины/площади/объёмы в СИ (нужно экспорту для пересчёта единиц)
+        _prim_dict_attr(pk, "ifc_measures", [r.get("measures") or {} for r in recs])
+        if flatten:
+            _flatten_psets(pk, recs, lambda v: v)
+
+
+def _element_geo(r, y_up, scale, want_color, local=False):
+    """Геометрия одного элемента как отдельный hou.Geometry (+ цвет первой грани)."""
+    from . import ifc_read
+    v = _to_houdini(r["verts"] if local else ifc_read.world_verts(r), y_up, scale)
+    sub = hou.Geometry()
+    center = np.zeros(3) if local or not len(v) else (v.min(axis=0) + v.max(axis=0)) * 0.5
+    _build_mesh(sub, v - center, r["faces"])
+    first = np.array([0.8, 0.8, 0.8], dtype=np.float32)
+    if want_color and len(r["faces"]):
+        c = _face_colors(r)
+        _prim_float_attr(sub, "Cd", c[:, :3], 3)
+        # Alpha пишем всегда (по умолчанию 1): иначе при Unpack/Merge непрозрачные элементы получают 0
+        _prim_float_attr(sub, "Alpha", c[:, 3], default=1.0)
+        _prim_string_attr(sub, "ifc_style", _face_style_names(r))
+        first = c[0, :3]
+    return sub, center, first
+
+
+def _hou_placement(matrix, y_up, scale):
+    """Матрица размещения IFC -> (3x3 для packed-примитива, положение точки) в осях Houdini."""
+    C = np.array([[1.0, 0, 0], [0, 0, 1.0], [0, -1.0, 0]]) if y_up else np.eye(3)
+    m = np.asarray(matrix, dtype=np.float64)
+    A = C @ m[:3, :3] @ np.linalg.inv(C)
+    b = scale * (C @ m[:3, 3])
+    return A, b
+
+
+def _set_packed_transform(prim, A):
+    """3x3 трансформация packed-примитива (положение задаёт точка)."""
+    t = tuple(float(x) for x in A.T.reshape(9))  # Houdini: строки — это столбцы матрицы
+    try:
+        prim.setIntrinsicValue("transform", t)
+    except Exception:
+        prim.setTransform(hou.Matrix4([[t[0], t[1], t[2], 0], [t[3], t[4], t[5], 0],
+                                       [t[6], t[7], t[8], 0], [0, 0, 0, 1]]))
+
+
+def _cook_packed(geo, recs, y_up, scale, want_color, instanced=None):
+    """Packed-примитив на элемент. Для geom_id из instanced геометрия создаётся один раз
+    и ставится копиями по матрице из IFC (экономия памяти и быстрый вьюпорт)."""
+    first_colors = []
+    shared = {}
+    for r in recs:
+        gid = r.get("geom_id")
+        if instanced and gid in instanced:
+            cached = shared.get(gid)
+            if cached is None:
+                sub, _, first = _element_geo(r, y_up, scale, want_color, local=True)
+                cached = shared[gid] = (sub.freeze(True), first)
+            frozen, first = cached
+            A, b = _hou_placement(r["matrix"], y_up, scale)
+            pt = geo.createPoint()
+            pt.setPosition(hou.Vector3(*[float(x) for x in b]))
+            prim = geo.createPackedGeometry(frozen, pt)
+            _set_packed_transform(prim, A)
+        else:
+            sub, center, first = _element_geo(r, y_up, scale, want_color)
+            pt = geo.createPoint()
+            pt.setPosition([float(x) for x in center])
+            geo.createPackedGeometry(sub.freeze(True), pt)
+        first_colors.append(first)
+    if want_color and first_colors:
+        _prim_float_attr(geo, "Cd", np.array(first_colors), 3)
+
+
+def info_text(kwargs):
+    """Кнопка Info: сводка по файлу."""
+    from . import ifc_read
+    node = kwargs["node"]
+    path = hou.text.expandString(node.parm("file").evalAsString())
+    try:
+        i = ifc_read.file_info(path)
+        msg = json.dumps(i, indent=2, ensure_ascii=False)
+        g = node.geometry() if node.geometry() is not None else None
+        w = g.attribValue("ifc_warnings") if (g is not None and g.findGlobalAttrib("ifc_warnings")) else ""
+        if w:
+            msg += "\n\nWarnings:\n" + w
+    except Exception as ex:
+        msg = "Error: %s" % ex
+    hou.ui.displayMessage(msg, title="HIFC: IFC info")

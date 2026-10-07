@@ -47,9 +47,10 @@ def main():
     bad = []
     for f in glob.glob(os.path.join(ROOT, "**", "*.py"), recursive=True):
         rel = os.path.relpath(f, ROOT)
-        if rel.startswith("tests/out") or rel.endswith(os.path.join("hifc", "__init__.py")):
+        if rel.startswith("tests/out"):
             continue
-        if re.search(r"hifc::ifc_(import|export)::", open(f).read()):
+        # запрещено только полное имя с номером версии; «hifc::ifc_import::» + HDA_VERSION — это и есть константа
+        if re.search(r"hifc::ifc_(import|export)::\d", open(f).read()):
             bad.append(rel)
     check(not bad, "строковых имён типов нет (найдены в %r)" % bad)
     check(hifc.IMPORT_TYPE.endswith("::" + hifc.HDA_VERSION) and hifc.EXPORT_TYPE.endswith("::" + hifc.HDA_VERSION),

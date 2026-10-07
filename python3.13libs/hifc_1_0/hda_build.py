@@ -3,7 +3,7 @@
 """Сборка HDA плагина (hifc::ifc_import, hifc::ifc_export) в $HIFC/otls.
 
 Запуск: меню HIFC > Rebuild HDAs, либо в Python Shell:
-    import hifc.hda_build as b; b.build_all()
+    import hifc_1_0.hda_build as b; b.build_all()
 HDA тонкие: вся логика в python-модуле hifc, поэтому пересборка нужна только при изменении интерфейса.
 """
 import os

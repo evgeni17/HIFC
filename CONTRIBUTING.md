@@ -33,6 +33,27 @@ and `VENDOR` — the exact versions of the third-party modules HIFC is tested wi
 `VERSIONS.json`, `vendor/README.md` and `THIRD_PARTY_NOTICES.md`; change them in one commit, after running the full
 test suite against the new module version. Node type names are only ever built from these constants.
 
+## Asset versions and freezing
+
+A release `0.N` ships assets `::N.0`; a fix to a released version that changes node behaviour ships `::N.1`.
+Each released version is frozen: its Python package is copied to `python3.13libs/hifc_<N>_<M>` with `FROZEN = True`,
+and its HDAs are rebuilt from that copy, so a node in someone's scene always runs the code it was tested with.
+Frozen copies are never edited — a fix for old scenes is a new asset version.
+
+```bash
+python3 freeze.py N.M                       # copy the package, mark it frozen
+python3 deploy.py ~/tools_houdini/HIFC
+# in Houdini: import hifc_<N>_<M>.hda_build as b; b.build_all(force=True, otls="<repo>/otls")
+python3 deploy.py ~/tools_houdini/HIFC
+python3 freeze.py --seal N.M                # FROZEN.sha256 + the frozen record in VERSIONS.json
+python3 freeze.py --next <next version>     # development moves on; then deploy, build_all, deploy again
+```
+
+IfcOpenShell is loaded once per Houdini session, so all asset versions share it. That is why every version records
+in `VERSIONS.json` the module set it was verified with, and `also_tested` lists later sets it was re-checked against.
+Changing a module version means re-running the full suite for **every** installed asset version before updating the
+records.
+
 ## Tests
 
 ```bash
@@ -40,6 +61,9 @@ python3 tests/test_repo.py                  # repository consistency, no Houdini
 hython tests/test_core.py                   # reader/writer without Houdini nodes
 hython tests/roundtrip.py                   # 35 buildingSMART certification files
 hython tests/houdini_regression.py          # the HDAs in a Houdini session
+python3 tests/test_frozen.py                # frozen copies: checksums, isolation, VERSIONS.json
+hython tests/hip_compat.py build  scene.hip # a scene with every installed asset version
+hython tests/hip_compat.py reopen scene.hip # reopen it in a separate process and compare
 ```
 
 Every fixed behaviour gets a test that fails without the fix. The README banner (`docs/HIFC.jpg`) stays right after

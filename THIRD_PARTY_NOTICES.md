@@ -6,16 +6,19 @@ They are installed by the user into `vendor/<python>-<os>-<arch>/`
 (menu **HIFC › Install / Update ifcopenshell**, or `pip install --target`),
 and each keeps its own licence.
 
-| Package | Licence | Project |
-|---|---|---|
-| ifcopenshell (IfcOpenShell) | LGPL-3.0-or-later | https://github.com/IfcOpenShell/IfcOpenShell |
-| shapely | BSD-3-Clause | https://github.com/shapely/shapely |
-| lark | MIT | https://github.com/lark-parser/lark |
-| isodate | BSD-3-Clause | https://github.com/gweis/isodate |
-| python-dateutil | Apache-2.0 OR BSD-3-Clause | https://github.com/dateutil/dateutil |
-| six | MIT | https://github.com/benjaminp/six |
-| typing_extensions | PSF-2.0 | https://github.com/python/typing_extensions |
-| numpy (shipped with Houdini) | BSD-3-Clause | https://numpy.org |
+| Package | Pinned version | Licence | Project |
+|---|---|---|---|
+| ifcopenshell (IfcOpenShell) | 0.8.5 | LGPL-3.0-or-later | https://github.com/IfcOpenShell/IfcOpenShell |
+| shapely | 2.1.2 | BSD-3-Clause | https://github.com/shapely/shapely |
+| isodate | 0.7.2 | BSD-3-Clause | https://github.com/gweis/isodate |
+| python-dateutil | 2.9.0.post0 | Apache-2.0 OR BSD-3-Clause | https://github.com/dateutil/dateutil |
+| six | 1.17.0 | MIT | https://github.com/benjaminp/six |
+| lark | 1.3.1 | MIT | https://github.com/lark-parser/lark |
+| typing_extensions | 4.16.0 | PSF-2.0 | https://github.com/python/typing_extensions |
+| numpy (shipped with Houdini) | — | BSD-3-Clause | https://numpy.org |
+
+The pinned versions are the ones HIFC is tested with; they live in `VENDOR` in
+`python3.13libs/hifc/__init__.py` and in `VERSIONS.json`.
 
 ## IfcOpenShell and the LGPL
 

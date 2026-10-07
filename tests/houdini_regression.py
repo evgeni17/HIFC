@@ -13,8 +13,8 @@ import tempfile
 import hou
 
 HERE = os.path.dirname(os.path.abspath(__file__)) if "__file__" in globals() else os.path.join(os.environ.get("HIFC", ""), "tests")
-IMPORT = "hifc::ifc_import::1.0"
-EXPORT = "hifc::ifc_export::1.0"
+import hifc
+IMPORT, EXPORT = hifc.IMPORT_TYPE, hifc.EXPORT_TYPE
 TMP = tempfile.mkdtemp(prefix="hifc_hou_")
 FAILS = []
 

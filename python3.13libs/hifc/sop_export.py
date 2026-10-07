@@ -352,7 +352,8 @@ def export_node(kwargs):
               % (schema, st["elements"], st["assemblies"], st["storeys"], st["styles"], st["materials"], st["seconds"])]
     if _ev(node, "validate", 0):
         report.append(_validate(st["ifc"]))
-    msgs = messages + st["warnings"]
+    from .sop_import import vendor_warnings
+    msgs = messages + st["warnings"] + vendor_warnings()
     if msgs:
         uniq = list(dict.fromkeys(msgs))
         report.append("Warnings (%d):\n  " % len(uniq) + "\n  ".join(uniq[:30]))

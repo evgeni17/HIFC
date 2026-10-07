@@ -388,14 +388,29 @@ def _write_context(geo, ctx, y_up, scale, rebase=None):
 
 
 def warning_text(stats):
-    """Текст предупреждения о том, что при чтении не перенеслось в атрибуты."""
+    """Все предупреждения ноды одним текстом: Python SOP показывает только последнее."""
+    parts = []
     sk = (stats or {}).get("skipped_properties") or {}
-    if not sk:
-        return ""
-    items = ", ".join("%s x%d" % kv for kv in sorted(sk.items()))
-    return ("Some IFC properties are not imported as attributes: %s. "
-            "These property types hold tables or references, not a single value; "
-            "they stay in the source file and are not written back on export." % items)
+    if sk:
+        items = ", ".join("%s x%d" % kv for kv in sorted(sk.items()))
+        parts.append("Some IFC properties are not imported as attributes: %s. "
+                     "These property types hold tables or references, not a single value; "
+                     "they stay in the source file and are not written back on export." % items)
+    parts.extend(vendor_warnings())
+    return "\n\n".join(parts)
+
+
+def vendor_warnings():
+    """Версии модулей в vendor/ отличаются от закреплённых — результат может отличаться от проверенного."""
+    try:
+        from . import deps
+        bad = deps.version_mismatches()
+    except Exception:
+        return []
+    if not bad:
+        return []
+    return ["Vendor modules differ from the versions this plugin was tested with: %s. "
+            "Run HIFC > Install / Update ifcopenshell to get the pinned versions." % ", ".join(bad)]
 
 
 def _flatten_psets(geo, recs, rep):

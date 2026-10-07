@@ -10,7 +10,7 @@ import os
 import subprocess
 import sys
 
-from . import ensure_vendor_path, vendor_dir, has_ifcopenshell
+from . import ensure_vendor_path, vendor_dir, has_ifcopenshell, VENDOR
 
 
 def houdini_python():
@@ -31,7 +31,8 @@ def houdini_python():
     return None
 
 
-def install(upgrade=False, log=print):
+def install(latest=False, log=print):
+    """Ставит в vendor/ ровно закреплённые версии (VENDOR). latest=True — только по явной просьбе пользователя."""
     target = vendor_dir()
     os.makedirs(target, exist_ok=True)
     py = houdini_python()
@@ -39,9 +40,9 @@ def install(upgrade=False, log=print):
         raise RuntimeError("Houdini Python not found (HFS=%s)" % os.environ.get("HFS"))
     # pip может отсутствовать во встроенном Python
     subprocess.call([py, "-m", "ensurepip", "--user"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    cmd = [py, "-m", "pip", "install", "--target", target, "--no-warn-script-location", "ifcopenshell"]
-    if upgrade:
-        cmd.insert(4, "--upgrade")
+    # --no-deps: состав и версии задаёт VENDOR, иначе pip притянет что угодно свежее
+    pkgs = list(VENDOR) if latest else ["%s==%s" % kv for kv in VENDOR.items()]
+    cmd = [py, "-m", "pip", "install", "--target", target, "--no-warn-script-location", "--no-deps", "--upgrade"] + pkgs
     log("[HIFC] " + " ".join(cmd))
     r = subprocess.run(cmd, capture_output=True, text=True)
     log(r.stdout[-3000:])
@@ -55,10 +56,35 @@ def install(upgrade=False, log=print):
     return target
 
 
+def installed_versions():
+    """Что реально лежит в vendor/: {модуль: версия или ""} по *.dist-info."""
+    out = {}
+    for name in VENDOR:
+        stem = name.replace("-", "_")
+        out[name] = ""
+        for d in sorted(glob.glob(os.path.join(vendor_dir(), stem + "-*.dist-info"))):
+            # имя папки: <модуль>-<версия>.dist-info
+            out[name] = os.path.basename(d)[len(stem) + 1:-len(".dist-info")]
+            break
+    return out
+
+
+def version_mismatches():
+    """Список строк «модуль: закреплено X, установлено Y» — для предупреждения ноды и About."""
+    found = installed_versions()
+    bad = []
+    for name, pinned in VENDOR.items():
+        got = found.get(name) or ""
+        if got and got != pinned:
+            bad.append("%s %s (pinned %s)" % (name, got, pinned))
+    return bad
+
+
 def status():
     ok = has_ifcopenshell()
     ver = ""
     if ok:
         import ifcopenshell
         ver = ifcopenshell.version
-    return {"ifcopenshell": ok, "version": ver, "vendor": vendor_dir(), "python": sys.version.split()[0]}
+    return {"ifcopenshell": ok, "version": ver, "vendor": vendor_dir(), "python": sys.version.split()[0],
+            "installed": installed_versions(), "mismatches": version_mismatches()}

@@ -1,0 +1,21 @@
+{
+  "comment": "Версии ассетов HIFC и проверенное окружение. Запись разработки обновляется при каждой смене версии модуля или шага dev; записи замороженных версий пишет freeze.py --seal и больше не меняет.",
+  "assets": {
+    "1.0": {
+      "status": "development",
+      "plugin": "0.6.0.dev1",
+      "package": "hifc",
+      "vendor": {
+        "ifcopenshell": "0.8.5",
+        "shapely": "2.1.2",
+        "isodate": "0.7.2",
+        "python-dateutil": "2.9.0.post0",
+        "six": "1.17.0",
+        "lark": "1.3.1",
+        "typing-extensions": "4.16.0"
+      },
+      "houdini": "22.0.429",
+      "python": "3.13"
+    }
+  }
+}

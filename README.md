@@ -27,10 +27,13 @@ Bonsai add-on for Blender, and does not need Blender.
    (macOS `~/Library/Preferences/houdini/22.0/packages/`,
    Windows `%USERPROFILE%/Documents/houdini22.0/packages/`,
    Linux `~/houdini22.0/packages/`) and set `"HIFC"` to the path of the cloned folder.
-   `"HIFC_HELP_LANG"` can be `en` or `ru`.
-3. Start Houdini and run **HIFC › Install / Update ifcopenshell**, or install it manually (see `vendor/README.md`).
-   Restart Houdini.
-4. Run **HIFC › Rebuild HDAs** once if you changed `HIFC_HELP_LANG` or edited the node interface.
+3. Start Houdini and run **HIFC › Install / Update ifcopenshell** — it installs the pinned versions listed in
+   `VERSIONS.json` — or install them manually (see `vendor/README.md`). Restart Houdini.
+
+Node help (F1) is bilingual: English first, the same text in Russian below it.
+
+Developing HIFC: edit the repository, then `python3 deploy.py ~/tools_houdini/HIFC` to update the installed copy
+(it writes `INSTALL.json` with the version and commit). Houdini loads the installed folder, never the repository.
 
 ## Usage
 

@@ -27,11 +27,12 @@ def rss_mb():
     return round(v / (1e6 if sys.platform == "darwin" else 1e3), 1)  # macOS: байты, linux: КБ
 
 
+import hifc  # noqa: E402
 import hifc.sop_import as si  # noqa: E402
 
 si.clear_disk_cache()
 net = hou.node("/obj").createNode("geo", "mem")
-imp = net.createNode("hifc::ifc_import::1.0", "imp")
+imp = net.createNode(hifc.IMPORT_TYPE, "imp")
 imp.parm("file").set(P)
 # прогрев кэша записей без построения геометрии: дальше меряем только цену геометрии
 si._load(P, [], ["IfcOpeningElement", "IfcSpace", "IfcVirtualElement"], "elements", True, 0, None, True)

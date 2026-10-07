@@ -2,8 +2,7 @@
     "enable": true,
     "load_package_once": true,
     "env": [
-        {"HIFC": "/path/to/HIFC"},
-        {"HIFC_HELP_LANG": "en"}
+        {"HIFC": "/path/to/HIFC"}
     ],
     "path": "$HIFC"
 }

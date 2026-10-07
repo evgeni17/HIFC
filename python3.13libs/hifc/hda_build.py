@@ -10,12 +10,10 @@ import os
 
 import hou
 
-from . import ROOT, __version__
+from . import ROOT, __version__, IMPORT_TYPE, EXPORT_TYPE
 
 OTLS = os.path.join(ROOT, "otls")
 
-IMPORT_TYPE = "hifc::ifc_import::1.0"
-EXPORT_TYPE = "hifc::ifc_export::1.0"
 
 IMPORT_CODE = """# HIFC: чтение IFC (логика в модуле hifc.sop_import)
 import hifc.sop_import as m

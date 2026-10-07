@@ -52,6 +52,7 @@ def stage(name, fn):
     save()
 
 
+import hifc  # noqa: E402
 import hifc.ifc_read as r  # noqa: E402
 import hifc.sop_export as se  # noqa: E402
 import hifc.sop_import as si  # noqa: E402
@@ -59,7 +60,7 @@ import hifc.sop_import as si  # noqa: E402
 si.clear_disk_cache()  # холодный старт
 
 net = hou.node("/obj").createNode("geo", "perf")
-imp = net.createNode("hifc::ifc_import::1.0", "imp")
+imp = net.createNode(hifc.IMPORT_TYPE, "imp")
 imp.parm("file").set(P)
 
 if "core" in STAGES:
@@ -125,7 +126,7 @@ if "polys" in STAGES:
 if "export" in STAGES:
     def export():
         imp.parm("output").set(0)
-        exp = net.createNode("hifc::ifc_export::1.0", "exp")
+        exp = net.createNode(hifc.EXPORT_TYPE, "exp")
         exp.setInput(0, imp)
         exp.parm("file").set(os.path.join(tempfile.gettempdir(), "hifc_perf_out.ifc"))
         se.export_node({"node": exp, "silent": True})

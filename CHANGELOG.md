@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.6.0-dev.1 — 2026-10-07
+Repository and installation hygiene (no change to import/export behaviour):
+* **Pinned dependency versions.** `VENDOR` in `python3.13libs/hifc/__init__.py` is now the single place that says
+  which versions HIFC is tested with: ifcopenshell 0.8.5, shapely 2.1.2, isodate 0.7.2, python-dateutil 2.9.0.post0,
+  six 1.17.0, lark 1.3.1, typing-extensions 4.16.0 (NumPy comes from Houdini). **HIFC › Install / Update
+  ifcopenshell** installs exactly those with `--no-deps`; the nodes warn when what is installed differs, and
+  **About** lists pinned against installed. The same set is recorded in the new `VERSIONS.json`, in
+  `vendor/README.md` and in `THIRD_PARTY_NOTICES.md`.
+* **`deploy.py`** installs the plugin from the repository into the working folder (`~/tools_houdini/HIFC` by default),
+  copying only changed files and writing `INSTALL.json` (version, commit, date, file list). `--clean` removes files a
+  previous install left behind, `--dry-run` shows what would happen. The repository is never loaded by Houdini.
+* **Node type names** come from `IMPORT_TYPE` / `EXPORT_TYPE` (built from `HDA_VERSION`), including the tests.
+* **Node help is bilingual in one page**: English first, the same text in Russian below. `HIFC_HELP_LANG` is gone —
+  the repository and the installed copy now hold identical HDAs.
+* New `tests/test_repo.py`: dependency versions agree across all the places that record them, no hard-coded type
+  names, banner in both READMEs, help has both languages.
+
 ## 0.5.1 — 2026-09-22
 * **`4@global_xform`** — the matrix of the top placement level (the root site, or the root building if there is no
   site) in scene axes and units, with `s@global_xform_source` naming where it comes from. Transform By Attribute with

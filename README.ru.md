@@ -18,10 +18,13 @@ Blender не нужен.
 
 1. Склонируйте репозиторий (`git clone https://github.com/evgeni17/HIFC.git`), например в `~/houdini_tools/HIFC`.
 2. Скопируйте `HIFC.json` в папку packages Houdini и пропишите в `"HIFC"` путь к папке плагина.
-   Для русской справки поставьте `"HIFC_HELP_LANG": "ru"`.
-3. Запустите Houdini и выполните **HIFC › Install / Update ifcopenshell**
-   (или установите вручную, см. `vendor/README.md`), затем перезапустите Houdini.
-4. После смены языка справки один раз выполните **HIFC › Rebuild HDAs**.
+3. Запустите Houdini и выполните **HIFC › Install / Update ifcopenshell** — ставятся закреплённые версии
+   из `VERSIONS.json` (или вручную, см. `vendor/README.md`), затем перезапустите Houdini.
+
+Справка ноды (F1) двуязычная: сначала английский текст, следом тот же раздел по-русски.
+
+Для разработки: правки — в репозитории, затем `python3 deploy.py ~/tools_houdini/HIFC` обновляет установленную
+копию и пишет туда `INSTALL.json` с версией и коммитом. Houdini всегда грузит установленную папку, не репозиторий.
 
 ## Скорость
 

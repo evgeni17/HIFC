@@ -66,10 +66,15 @@ def rebuild_hdas(kwargs=None):
 
 
 def about(kwargs=None):
-    from . import deps
+    from . import deps, HDA_VERSION, HOUDINI_TESTED, VENDOR
     st = deps.status()
-    msg = ("HIFC %s — IFC import/export for Houdini\nRoot: %s\n\nifcopenshell: %s %s\nvendor: %s\nPython: %s"
-           % (__version__, ROOT, "OK" if st["ifcopenshell"] else "NOT FOUND", st["version"], st["vendor"], st["python"]))
+    mods = "\n".join("  %-18s pinned %-12s installed %s" % (n, v, st["installed"].get(n) or "-")
+                      for n, v in VENDOR.items())
+    msg = ("HIFC %s — IFC import/export for Houdini\nAssets: ::%s\nRoot: %s\n\n"
+           "ifcopenshell: %s %s\nvendor: %s\nPython: %s (tested Houdini %s)\n\nModules:\n%s%s"
+           % (__version__, HDA_VERSION, ROOT, "OK" if st["ifcopenshell"] else "NOT FOUND", st["version"],
+              st["vendor"], st["python"], HOUDINI_TESTED, mods,
+              ("\n\nMismatch: " + ", ".join(st["mismatches"])) if st["mismatches"] else ""))
     hou.ui.displayMessage(msg, title="HIFC")
 
 
@@ -81,7 +86,8 @@ def attribute_template(kwargs=None):
 
 def attribute_guide(kwargs=None):
     """Открыть справку HIFC IFC Export (правила атрибутов)."""
-    nt = hou.nodeType(hou.sopNodeTypeCategory(), "hifc::ifc_export::1.0")
+    from . import EXPORT_TYPE
+    nt = hou.nodeType(hou.sopNodeTypeCategory(), EXPORT_TYPE)
     if nt is None:
         hou.ui.displayMessage("hifc::ifc_export not installed. Run HIFC > Rebuild HDAs.", title="HIFC")
         return

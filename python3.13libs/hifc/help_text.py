@@ -610,11 +610,32 @@ Move to Origin:
 """
 
 
-def _lang():
-    import os
-    return (os.environ.get("HIFC_HELP_LANG") or "en").lower()[:2]
+def _ru_block(ru):
+    """Русская страница как подраздел английской: без заголовка страницы и без @-секций."""
+    titles = {"parameters": "Параметры", "attributes": "Атрибуты", "properties": "Свойства",
+              "detail": "Detail-атрибуты", "examples": "Примеры"}
+    out, started = [], False
+    for ln in ru.splitlines():
+        if not started:
+            # шапка страницы: заголовок «= ... =», строки #type/#context/#internal/#icon и пустые
+            if not ln.strip() or ln.startswith("=") or ln.startswith("#"):
+                continue
+            started = True
+        if ln.startswith("@"):
+            word, _, rest = ln[1:].partition(" ")
+            out += ["", "=== %s ===" % (rest.strip() or titles.get(word, word.title())), ""]
+            continue
+        if ln.startswith("== ") and ln.rstrip().endswith(" =="):
+            ln = "=" + ln.rstrip() + "="           # на уровень ниже английских разделов
+        out.append(ln.replace('"""', ""))
+    return "\n".join(out).strip()
 
 
-# язык справки: переменная HIFC_HELP_LANG в packages/HIFC.json ("en" по умолчанию, "ru")
-HELP_EXPORT = HELP_EXPORT_RU if _lang() == "ru" else HELP_EXPORT_EN
-HELP_IMPORT = HELP_IMPORT_RU if _lang() == "ru" else HELP_IMPORT_EN
+def _merge(en, ru):
+    """Одна страница справки с обоими языками: HDA одинаковы в репозитории и в установке."""
+    return "%s\n\n== Справка по-русски ==\n\n%s\n" % (en.rstrip(), _ru_block(ru))
+
+
+# справка двуязычная: английский текст, следом тот же раздел по-русски (переменная HIFC_HELP_LANG больше не нужна)
+HELP_EXPORT = _merge(HELP_EXPORT_EN, HELP_EXPORT_RU)
+HELP_IMPORT = _merge(HELP_IMPORT_EN, HELP_IMPORT_RU)

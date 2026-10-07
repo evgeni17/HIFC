@@ -29,9 +29,12 @@ def main():
     print("1. Версии зависимостей закреплены в одном наборе")
     versions = json.load(open(os.path.join(ROOT, "VERSIONS.json")))
     dev = [v for v in versions["assets"].values() if v.get("status") == "development"]
-    check(len(dev) == 1, "в VERSIONS.json ровно одна запись разработки (%d)" % len(dev))
-    if dev:
-        rec = dev[0]
+    # сразу после выпуска записи разработки нет до freeze.py --next: тогда сверяемся с только что замороженной
+    released = not dev and versions["assets"].get(hifc.HDA_VERSION, {}).get("status") == "frozen"
+    check(len(dev) == 1 or released,
+          "в VERSIONS.json одна запись разработки, либо это состояние сразу после выпуска ::%s" % hifc.HDA_VERSION)
+    if dev or released:
+        rec = dev[0] if dev else versions["assets"][hifc.HDA_VERSION]
         check(rec["vendor"] == hifc.VENDOR, "VERSIONS.json vendor == hifc.VENDOR")
         check(rec["plugin"] == hifc.__version__, "VERSIONS.json plugin == __version__ (%s)" % rec["plugin"])
         check(rec["houdini"] == hifc.HOUDINI_TESTED, "VERSIONS.json houdini == HOUDINI_TESTED")

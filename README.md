@@ -107,7 +107,17 @@ Attribute = `global_xform` and *Invert Transformation* brings the model to the o
 turn on **Move to Origin** on the import node instead: the same move is done in double precision before positions are
 stored in float32, so nothing is lost; Transform By Attribute without Invert puts the model back.
 
-## Limitations (0.5)
+## Asset versions
+
+| Assets | Package | Status |
+|---|---|---|
+| `hifc::ifc_import::6.0`, `hifc::ifc_export::6.0` | `hifc_6_0` | 0.6.0, frozen — new nodes use this |
+| `hifc::ifc_import::1.0`, `hifc::ifc_export::1.0` | `hifc_1_0` | kept for scenes made before versioning |
+
+Each released version keeps its own copy of the Python package, so a node in an existing scene keeps running the code
+it was released with. Tab creates the newest version; existing nodes are never upgraded on their own.
+
+## Limitations (0.6)
 
 * Geometry is exported as meshes (`IfcPolygonalFaceSet`). There are no parametric extrusions or profiles yet.
 * Type objects (`IfcTypeProduct`), openings and host/opening relations are not written;

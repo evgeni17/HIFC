@@ -25,8 +25,8 @@
       "note": "Переход на версионирование: код по состоянию на 0.6.0-dev.2 заморожен под прежним номером ассетов ::1.0, чтобы существующие сцены продолжали работать."
     },
     "6.0": {
-      "status": "development",
-      "package": "hifc",
+      "status": "frozen",
+      "package": "hifc_6_0",
       "vendor": {
         "ifcopenshell": "0.8.5",
         "shapely": "2.1.2",
@@ -38,7 +38,13 @@
       },
       "houdini": "22.0.429",
       "python": "3.13",
-      "plugin": "0.6.0.dev3"
+      "plugin": "0.6.0",
+      "assets": [
+        "hifc_ifc_export_6.0.hda",
+        "hifc_ifc_import_6.0.hda"
+      ],
+      "sealed": "2026-10-07",
+      "also_tested": []
     }
   }
 }

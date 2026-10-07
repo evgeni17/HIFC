@@ -5,6 +5,7 @@ vendor/*
 tests/datasets/
 tests/out/
 *.png
+!docs/*.png
 # служебное
 __pycache__/
 *.pyc
@@ -14,3 +15,5 @@ backup/
 *.hiplc
 *.hipnc
 tests/big/
+# эталонная сцена восстанавливается тестом; в git держим только снимок состояния
+tests/reference/*.ifc

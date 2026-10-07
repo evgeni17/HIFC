@@ -13,7 +13,7 @@ __version__ = "0.6.0"
 
 # версия ассетов: сейчас hifc::*::1.0 (переход на правило «релиз 0.N -> ассеты ::N.0» — отдельным заходом)
 HDA_VERSION = "6.0"
-FROZEN = False
+FROZEN = True
 IMPORT_TYPE = "hifc::ifc_import::" + HDA_VERSION
 EXPORT_TYPE = "hifc::ifc_export::" + HDA_VERSION
 

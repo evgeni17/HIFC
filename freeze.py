@@ -100,6 +100,13 @@ def seal(version):
     if not os.path.isdir(dst):
         print("seal: %s does not exist — run freeze.py %s first" % (name, version))
         return 1
+    versions_path = os.path.join(HERE, "VERSIONS.json")
+    sealed_before = json.load(open(versions_path))["assets"].get(version, {}).get("status") == "frozen"
+    if os.path.isfile(os.path.join(dst, SUMS)) or sealed_before:
+        # иначе запечатывание можно повторить поверх изменённого кода, и суммы перестанут что-либо значить
+        print("seal: ::%s is already sealed (%s/%s). A sealed version is never re-sealed: "
+              "if it needs a change, that is a new asset version." % (version, name, SUMS))
+        return 1
     otls = [f for f in sorted(os.listdir(os.path.join(HERE, "otls"))) if f.endswith("_%s.hda" % version)]
     if not otls:
         print("seal: no otls/*_%s.hda — build the frozen assets first" % version)
@@ -110,7 +117,7 @@ def seal(version):
         for k in sorted(sums):
             fh.write("%s  %s\n" % (sums[k], k))
 
-    versions = json.load(open(os.path.join(HERE, "VERSIONS.json")))
+    versions = json.load(open(versions_path))
     dev = versions["assets"].get(read_const(os.path.join(LIBS, PKG, "__init__.py"), "HDA_VERSION"), {})
     rec = versions["assets"].get(version, {})
     rec.update({
@@ -128,12 +135,31 @@ def seal(version):
     json.dump(versions, open(os.path.join(HERE, "VERSIONS.json"), "w"), indent=2, ensure_ascii=False)
     open(os.path.join(HERE, "VERSIONS.json"), "a").write("\n")
     print("seal: %d files hashed into %s/%s; VERSIONS.json entry %s is frozen" % (len(sums), name, SUMS, version))
+    print("next: freeze.py --next %s  (development must leave the released number)" % _suggest_next(version))
     return 0
 
 
+def _suggest_next(version):
+    major, minor = (int(x) for x in version.split("."))
+    return "%d.0" % (major + 1)
+
+
 def next_version(version):
-    """Разработка переходит на следующую версию ассетов."""
+    """Разработка переходит на следующую версию ассетов (номер должен быть свободным и больше всех занятых)."""
     init = os.path.join(LIBS, PKG, "__init__.py")
+    versions_all = json.load(open(os.path.join(HERE, "VERSIONS.json")))["assets"]
+    taken = {v for v, r in versions_all.items() if r.get("status") == "frozen"}
+    taken |= {os.path.basename(p)[len("hifc_"):].replace("_", ".") for p in
+              __import__("glob").glob(os.path.join(LIBS, "hifc_*")) if os.path.isdir(p)}
+    if version in taken:
+        print("next: ::%s is already frozen — development may not take a released number" % version)
+        return 1
+    current = read_const(init, "HDA_VERSION")
+    keyed = [tuple(int(x) for x in v.split(".")) for v in taken | {current}]
+    if keyed and tuple(int(x) for x in version.split(".")) <= max(keyed):
+        print("next: ::%s is not above what is already taken (frozen %r, development ::%s)"
+              % (version, sorted(taken), current))
+        return 1
     text = set_const(open(init).read(), "HDA_VERSION", version)
     open(init, "w").write(text)
     versions = json.load(open(os.path.join(HERE, "VERSIONS.json")))
@@ -152,11 +178,16 @@ def next_version(version):
     rec["package"] = PKG
     rec.pop("assets", None)
     rec.pop("sealed", None)
-    rec["plugin"] = read_const(init, "__version__")
+    # версия плагина поднимается здесь же, чтобы шаг нельзя было забыть
+    major, minor = (int(x) for x in version.split("."))
+    plugin = "0.%d.%d.dev1" % (major, minor) if minor else "0.%d.0.dev1" % major
+    text = set_const(open(init).read(), "__version__", plugin)
+    open(init, "w").write(text)
+    rec["plugin"] = plugin
     versions["assets"][version] = rec
     json.dump(versions, open(os.path.join(HERE, "VERSIONS.json"), "w"), indent=2, ensure_ascii=False)
     open(os.path.join(HERE, "VERSIONS.json"), "a").write("\n")
-    print("development is now ::%s (was ::%s)" % (version, dev[0] if dev else "?"))
+    print("development is now ::%s, plugin %s (was ::%s)" % (version, plugin, dev[0] if dev else "?"))
     return 0
 
 

@@ -1,0 +1,400 @@
+{
+ "1.0|packed": {
+  "package": "hifc_1_0",
+  "type": "hifc::ifc_import::1.0",
+  "parms": {
+   "file": "/Users/evgenikalachin/tools_houdini/HIFC/tests/reference/compat.ifc",
+   "output": 0,
+   "yup": 1,
+   "scale": 1.0
+  },
+  "prims": 1,
+  "points": 1,
+  "packed": 1,
+  "bbox": [
+   0.0,
+   0.0,
+   -0.2,
+   2.0,
+   4.0,
+   0.0
+  ],
+  "prim_attribs": [
+   "Cd",
+   "ifc_class",
+   "ifc_description",
+   "ifc_guid",
+   "ifc_id",
+   "ifc_material",
+   "ifc_measures",
+   "ifc_name",
+   "ifc_object_type",
+   "ifc_predefined",
+   "ifc_psets",
+   "ifc_storey",
+   "ifc_tag",
+   "ifc_type",
+   "path"
+  ],
+  "detail_attribs": [
+   "global_xform",
+   "global_xform_source",
+   "ifc_crs",
+   "ifc_elements",
+   "ifc_facilities",
+   "ifc_file",
+   "ifc_georef",
+   "ifc_moved_to_origin",
+   "ifc_project",
+   "ifc_sites",
+   "ifc_warnings"
+  ],
+  "groups": [
+   "ifc_packed"
+  ],
+  "guid": "2e6ukwQyvVBhg07F6aQlXG",
+  "psets": "{'Qto_WallBaseQuantities': {'Length': 2.0}}",
+  "export_counts": {
+   "Schema": "IFC4",
+   "Elements": "1",
+   "Assemblies": "1",
+   "Storeys": "1",
+   "Styles": "2",
+   "Materials": "1"
+  },
+  "export_valid": true
+ },
+ "1.0|polys": {
+  "package": "hifc_1_0",
+  "type": "hifc::ifc_import::1.0",
+  "parms": {
+   "file": "/Users/evgenikalachin/tools_houdini/HIFC/tests/reference/compat.ifc",
+   "output": 1,
+   "yup": 1,
+   "scale": 1.0
+  },
+  "prims": 12,
+  "points": 16,
+  "packed": 0,
+  "bbox": [
+   0.0,
+   0.0,
+   -0.2,
+   2.0,
+   4.0,
+   0.0
+  ],
+  "prim_attribs": [
+   "Alpha",
+   "Cd",
+   "ifc_class",
+   "ifc_description",
+   "ifc_guid",
+   "ifc_id",
+   "ifc_material",
+   "ifc_measures",
+   "ifc_name",
+   "ifc_object_type",
+   "ifc_predefined",
+   "ifc_psets",
+   "ifc_storey",
+   "ifc_style",
+   "ifc_tag",
+   "ifc_type",
+   "path"
+  ],
+  "detail_attribs": [
+   "global_xform",
+   "global_xform_source",
+   "ifc_crs",
+   "ifc_elements",
+   "ifc_facilities",
+   "ifc_file",
+   "ifc_georef",
+   "ifc_moved_to_origin",
+   "ifc_project",
+   "ifc_sites",
+   "ifc_warnings"
+  ],
+  "groups": [
+   "ifc_polygons"
+  ],
+  "guid": "2e6ukwQyvVBhg07F6aQlXG",
+  "psets": "{'Qto_WallBaseQuantities': {'Length': 2.0}}",
+  "export_counts": {
+   "Schema": "IFC4",
+   "Elements": "1",
+   "Assemblies": "1",
+   "Storeys": "1",
+   "Styles": "2",
+   "Materials": "1"
+  },
+  "export_valid": true
+ },
+ "1.0|auto": {
+  "package": "hifc_1_0",
+  "type": "hifc::ifc_import::1.0",
+  "parms": {
+   "file": "/Users/evgenikalachin/tools_houdini/HIFC/tests/reference/compat.ifc",
+   "output": 2,
+   "yup": 1,
+   "scale": 1.0
+  },
+  "prims": 12,
+  "points": 16,
+  "packed": 0,
+  "bbox": [
+   0.0,
+   0.0,
+   -0.2,
+   2.0,
+   4.0,
+   0.0
+  ],
+  "prim_attribs": [
+   "Alpha",
+   "Cd",
+   "ifc_class",
+   "ifc_description",
+   "ifc_guid",
+   "ifc_id",
+   "ifc_material",
+   "ifc_measures",
+   "ifc_name",
+   "ifc_object_type",
+   "ifc_predefined",
+   "ifc_psets",
+   "ifc_storey",
+   "ifc_style",
+   "ifc_tag",
+   "ifc_type",
+   "path"
+  ],
+  "detail_attribs": [
+   "global_xform",
+   "global_xform_source",
+   "ifc_crs",
+   "ifc_elements",
+   "ifc_facilities",
+   "ifc_file",
+   "ifc_georef",
+   "ifc_moved_to_origin",
+   "ifc_project",
+   "ifc_sites",
+   "ifc_warnings"
+  ],
+  "groups": [
+   "ifc_polygons"
+  ],
+  "guid": "2e6ukwQyvVBhg07F6aQlXG",
+  "psets": "{'Qto_WallBaseQuantities': {'Length': 2.0}}",
+  "export_counts": {
+   "Schema": "IFC4",
+   "Elements": "1",
+   "Assemblies": "1",
+   "Storeys": "1",
+   "Styles": "2",
+   "Materials": "1"
+  },
+  "export_valid": true
+ },
+ "6.0|packed": {
+  "package": "hifc_6_0",
+  "type": "hifc::ifc_import::6.0",
+  "parms": {
+   "file": "/Users/evgenikalachin/tools_houdini/HIFC/tests/reference/compat.ifc",
+   "output": 0,
+   "yup": 1,
+   "scale": 1.0
+  },
+  "prims": 1,
+  "points": 1,
+  "packed": 1,
+  "bbox": [
+   0.0,
+   0.0,
+   -0.2,
+   2.0,
+   4.0,
+   0.0
+  ],
+  "prim_attribs": [
+   "Cd",
+   "ifc_class",
+   "ifc_description",
+   "ifc_guid",
+   "ifc_id",
+   "ifc_material",
+   "ifc_measures",
+   "ifc_name",
+   "ifc_object_type",
+   "ifc_predefined",
+   "ifc_psets",
+   "ifc_storey",
+   "ifc_tag",
+   "ifc_type",
+   "path"
+  ],
+  "detail_attribs": [
+   "global_xform",
+   "global_xform_source",
+   "ifc_crs",
+   "ifc_elements",
+   "ifc_facilities",
+   "ifc_file",
+   "ifc_georef",
+   "ifc_moved_to_origin",
+   "ifc_project",
+   "ifc_sites",
+   "ifc_warnings"
+  ],
+  "groups": [
+   "ifc_packed"
+  ],
+  "guid": "2e6ukwQyvVBhg07F6aQlXG",
+  "psets": "{'Qto_WallBaseQuantities': {'Length': 2.0}}",
+  "export_counts": {
+   "Schema": "IFC4",
+   "Elements": "1",
+   "Assemblies": "1",
+   "Storeys": "1",
+   "Styles": "2",
+   "Materials": "1"
+  },
+  "export_valid": true
+ },
+ "6.0|polys": {
+  "package": "hifc_6_0",
+  "type": "hifc::ifc_import::6.0",
+  "parms": {
+   "file": "/Users/evgenikalachin/tools_houdini/HIFC/tests/reference/compat.ifc",
+   "output": 1,
+   "yup": 1,
+   "scale": 1.0
+  },
+  "prims": 12,
+  "points": 16,
+  "packed": 0,
+  "bbox": [
+   0.0,
+   0.0,
+   -0.2,
+   2.0,
+   4.0,
+   0.0
+  ],
+  "prim_attribs": [
+   "Alpha",
+   "Cd",
+   "ifc_class",
+   "ifc_description",
+   "ifc_guid",
+   "ifc_id",
+   "ifc_material",
+   "ifc_measures",
+   "ifc_name",
+   "ifc_object_type",
+   "ifc_predefined",
+   "ifc_psets",
+   "ifc_storey",
+   "ifc_style",
+   "ifc_tag",
+   "ifc_type",
+   "path"
+  ],
+  "detail_attribs": [
+   "global_xform",
+   "global_xform_source",
+   "ifc_crs",
+   "ifc_elements",
+   "ifc_facilities",
+   "ifc_file",
+   "ifc_georef",
+   "ifc_moved_to_origin",
+   "ifc_project",
+   "ifc_sites",
+   "ifc_warnings"
+  ],
+  "groups": [
+   "ifc_polygons"
+  ],
+  "guid": "2e6ukwQyvVBhg07F6aQlXG",
+  "psets": "{'Qto_WallBaseQuantities': {'Length': 2.0}}",
+  "export_counts": {
+   "Schema": "IFC4",
+   "Elements": "1",
+   "Assemblies": "1",
+   "Storeys": "1",
+   "Styles": "2",
+   "Materials": "1"
+  },
+  "export_valid": true
+ },
+ "6.0|auto": {
+  "package": "hifc_6_0",
+  "type": "hifc::ifc_import::6.0",
+  "parms": {
+   "file": "/Users/evgenikalachin/tools_houdini/HIFC/tests/reference/compat.ifc",
+   "output": 2,
+   "yup": 1,
+   "scale": 1.0
+  },
+  "prims": 12,
+  "points": 16,
+  "packed": 0,
+  "bbox": [
+   0.0,
+   0.0,
+   -0.2,
+   2.0,
+   4.0,
+   0.0
+  ],
+  "prim_attribs": [
+   "Alpha",
+   "Cd",
+   "ifc_class",
+   "ifc_description",
+   "ifc_guid",
+   "ifc_id",
+   "ifc_material",
+   "ifc_measures",
+   "ifc_name",
+   "ifc_object_type",
+   "ifc_predefined",
+   "ifc_psets",
+   "ifc_storey",
+   "ifc_style",
+   "ifc_tag",
+   "ifc_type",
+   "path"
+  ],
+  "detail_attribs": [
+   "global_xform",
+   "global_xform_source",
+   "ifc_crs",
+   "ifc_elements",
+   "ifc_facilities",
+   "ifc_file",
+   "ifc_georef",
+   "ifc_moved_to_origin",
+   "ifc_project",
+   "ifc_sites",
+   "ifc_warnings"
+  ],
+  "groups": [
+   "ifc_polygons"
+  ],
+  "guid": "2e6ukwQyvVBhg07F6aQlXG",
+  "psets": "{'Qto_WallBaseQuantities': {'Length': 2.0}}",
+  "export_counts": {
+   "Schema": "IFC4",
+   "Elements": "1",
+   "Assemblies": "1",
+   "Storeys": "1",
+   "Styles": "2",
+   "Materials": "1"
+  },
+  "export_valid": true
+ }
+}

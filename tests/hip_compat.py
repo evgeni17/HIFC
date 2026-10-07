@@ -1,15 +1,17 @@
 # SPDX-FileCopyrightText: 2026 EOK
 # SPDX-License-Identifier: Apache-2.0
-"""Совместимость старых сцен: ноды всех установленных версий ассетов в одной сцене.
+"""Совместимость старых сцен: ноды всех установленных версий ассетов во всех режимах вывода.
 
     hython tests/hip_compat.py build  <scene.hip>    # собрать сцену, прогнать, сохранить + снимок состояния
     hython tests/hip_compat.py reopen <scene.hip>    # открыть в НОВОМ процессе и сверить со снимком
 
-Проверяется: какой пакет вызывает каждая версия, параметры, геометрия, атрибуты, экспорт, и то,
-что при открытии сцены ноды остаются на своей версии (никакого самовольного обновления).
+Для каждой версии ассетов создаются узлы импорта во всех трёх режимах (Packed, Polygons, Auto),
+и из каждого делается экспорт. Проверяется: какой пакет вызывает версия, параметры, геометрия, атрибуты,
+валидность экспорта, и то, что при открытии сцены ноды остаются на своей версии.
 """
 import json
 import os
+import re
 import sys
 
 import hou
@@ -69,37 +71,52 @@ def sample_ifc(path):
     return path
 
 
-def snapshot(net, ifc_path, out_dir):
-    """Состояние каждой версии: параметры, геометрия, атрибуты, отчёт экспорта."""
+MODES = ((0, "packed"), (1, "polys"), (2, "auto"))
+
+
+def node_names(ver, mode):
+    tag = "%s_%s" % (ver.replace(".", "_"), mode)
+    return "imp_" + tag, "exp_" + tag
+
+
+def snapshot(net, out_dir):
+    """Состояние каждой пары (версия ассетов, режим вывода)."""
     state = {}
-    for ver, (imp_type, exp_type) in installed_versions().items():
-        imp = net.node("imp_" + ver.replace(".", "_"))
-        exp = net.node("exp_" + ver.replace(".", "_"))
-        g = imp.geometry()
-        prim = g.prims()[0] if len(g.prims()) else None
-        bb = g.boundingBox()
-        state[ver] = {
-            "package": package_of(ver),
-            "type": imp.type().name(),
-            "parms": {p: imp.parm(p).eval() for p in ("file", "output", "yup", "scale") if imp.parm(p)},
-            "prims": len(g.prims()),
-            "points": g.intrinsicValue("pointcount"),
-            "bbox": [round(x, 5) for x in list(bb.minvec()) + list(bb.maxvec())],
-            "prim_attribs": sorted(a.name() for a in g.primAttribs()),
-            "detail_attribs": sorted(a.name() for a in g.globalAttribs()),
-            "guid": prim.attribValue("ifc_guid") if prim and g.findPrimAttrib("ifc_guid") else "",
-            "psets": str(prim.attribValue("ifc_psets")) if prim and g.findPrimAttrib("ifc_psets") else "",
-            "export_elements": None,
-        }
-        out = os.path.join(out_dir, "export_%s.ifc" % ver)
-        exp.parm("file").set(out)
-        if exp.parm("validate"):
-            exp.parm("validate").set(1)      # иначе в отчёте нет строки проверки
-        mod = __import__(state[ver]["package"] + ".sop_export", fromlist=["sop_export"])
-        mod.export_node({"node": exp, "silent": True})
-        rep = exp.parm("report").eval()
-        state[ver]["export_elements"] = [ln for ln in rep.splitlines() if ln.startswith("Schema:")]
-        state[ver]["export_valid"] = "Validation: OK" in rep
+    for ver in installed_versions():
+        pkg = package_of(ver)
+        mod = __import__(pkg + ".sop_export", fromlist=["sop_export"])
+        for _, mode in MODES:
+            iname, ename = node_names(ver, mode)
+            imp, exp = net.node(iname), net.node(ename)
+            if imp is None or exp is None:
+                continue
+            g = imp.geometry()
+            prim = g.prims()[0] if len(g.prims()) else None
+            bb = g.boundingBox()
+            key = "%s|%s" % (ver, mode)
+            out = os.path.join(out_dir, "export_%s_%s.ifc" % (ver, mode))
+            exp.parm("file").set(out)
+            if exp.parm("validate"):
+                exp.parm("validate").set(1)      # иначе в отчёте нет строки проверки
+            mod.export_node({"node": exp, "silent": True})
+            rep = exp.parm("report").eval()
+            state[key] = {
+                "package": pkg,
+                "type": imp.type().name(),
+                "parms": {p: imp.parm(p).eval() for p in ("file", "output", "yup", "scale") if imp.parm(p)},
+                "prims": len(g.prims()),
+                "points": g.intrinsicValue("pointcount"),
+                "packed": sum(1 for p in g.prims() if p.type() == hou.primType.PackedGeometry),
+                "bbox": [round(x, 5) for x in list(bb.minvec()) + list(bb.maxvec())],
+                "prim_attribs": sorted(a.name() for a in g.primAttribs()),
+                "detail_attribs": sorted(a.name() for a in g.globalAttribs()),
+                "groups": sorted(gr.name() for gr in g.primGroups()),
+                "guid": prim.attribValue("ifc_guid") if prim and g.findPrimAttrib("ifc_guid") else "",
+                "psets": str(prim.attribValue("ifc_psets")) if prim and g.findPrimAttrib("ifc_psets") else "",
+                # из отчёта берём только счётчики: время выполнения от запуска к запуску разное
+                "export_counts": dict(re.findall(r"(Schema|Elements|Assemblies|Storeys|Styles|Materials):\s*(\S+)", rep)),
+                "export_valid": "Validation: OK" in rep,
+            }
     return state
 
 
@@ -114,18 +131,34 @@ def build(hip):
     vers = installed_versions()
     check(len(vers) >= 2, "в сессии есть несколько версий ассетов: %s" % list(vers))
     for ver, (imp_type, exp_type) in vers.items():
-        tag = ver.replace(".", "_")
-        imp = net.createNode(imp_type, "imp_" + tag)
-        imp.parm("file").set(ifc_path)
-        imp.parm("output").set(1)          # полигоны: сравнивать проще и по ним же считается геометрия
-        exp = net.createNode(exp_type, "exp_" + tag)
-        exp.setInput(0, imp)
-        check(not imp.errors(), "%s: импорт без ошибок %r" % (imp_type, imp.errors()[:1]))
-    state = snapshot(net, ifc_path, out_dir)
-    for ver, st in state.items():
-        want = "hifc" if ver == max(state) else "hifc_%s" % ver.replace(".", "_")
-        check(st["package"] == want, "ассеты ::%s вызывают пакет %s (ожидали %s)" % (ver, st["package"], want))
-        check(st["prims"] > 0 and st["export_valid"], "::%s: %d примитивов, экспорт валиден" % (ver, st["prims"]))
+        for out_mode, mode in MODES:
+            iname, ename = node_names(ver, mode)
+            imp = net.createNode(imp_type, iname)
+            imp.parm("file").set(ifc_path)
+            imp.parm("output").set(out_mode)
+            exp = net.createNode(exp_type, ename)
+            exp.setInput(0, imp)
+            check(not imp.errors(), "%s %s: импорт без ошибок %r" % (imp_type, mode, imp.errors()[:1]))
+    state = snapshot(net, out_dir)
+    for ver in vers:
+        # у выпущенной версии есть своя замороженная копия; номер в разработке работает от общего пакета
+        frozen = "hifc_%s" % ver.replace(".", "_")
+        want = frozen if os.path.isdir(os.path.join(ROOT, "python3.13libs", frozen)) else "hifc"
+        check(package_of(ver) == want, "ассеты ::%s вызывают пакет %s (ожидали %s)" % (ver, package_of(ver), want))
+        for _, mode in MODES:
+            st = state.get("%s|%s" % (ver, mode), {})
+            check(st.get("prims", 0) > 0 and st.get("export_valid"),
+                  "::%s %s: %s примитивов, экспорт валиден" % (ver, mode, st.get("prims")))
+        packed = state["%s|packed" % ver]["packed"]
+        polys = state["%s|polys" % ver]["packed"]
+        check(packed > 0 and polys == 0, "::%s: Packed даёт packed-примитивы (%d), Polygons — нет (%d)"
+              % (ver, packed, polys))
+        bbs = {m: state["%s|%s" % (ver, m)]["bbox"] for _, m in MODES}
+        check(len({tuple(b) for b in bbs.values()}) == 1, "::%s: габариты совпадают во всех режимах: %r" % (ver, bbs))
+    # между версиями результат тоже должен совпадать
+    for _, mode in MODES:
+        same = {tuple(state["%s|%s" % (v, mode)]["bbox"]) for v in vers}
+        check(len(same) == 1, "режим %s: габариты одинаковы у всех версий (%r)" % (mode, same))
     hou.hipFile.save(hip)
     json.dump(state, open(hip + ".json", "w"), indent=1, ensure_ascii=False, default=str)
     print("scene saved: %s" % hip)
@@ -139,17 +172,19 @@ def reopen(hip):
     check(net is not None, "сцена открылась, сеть на месте")
     if net is None:
         return {}
-    for ver in before:
-        imp = net.node("imp_" + ver.replace(".", "_"))
-        check(imp is not None and imp.type().name() == before[ver]["type"],
-              "::%s нода осталась своей версии (%s)" % (ver, imp.type().name() if imp else "нет ноды"))
-    after = snapshot(net, "", os.path.dirname(os.path.abspath(hip)))
-    for ver, st in before.items():
-        now = after.get(ver, {})
-        for key in ("package", "parms", "prims", "points", "bbox", "prim_attribs", "detail_attribs", "guid", "psets"):
-            same = json.dumps(now.get(key), sort_keys=True, default=str) == json.dumps(st.get(key), sort_keys=True, default=str)
-            check(same, "::%s %s совпадает после перезапуска" % (ver, key))
-        check(now.get("export_valid"), "::%s экспорт из открытой сцены валиден" % ver)
+    for key in before:
+        ver, mode = key.split("|")
+        imp = net.node(node_names(ver, mode)[0])
+        check(imp is not None and imp.type().name() == before[key]["type"],
+              "%s нода осталась своей версии (%s)" % (key, imp.type().name() if imp else "нет ноды"))
+    after = snapshot(net, os.path.dirname(os.path.abspath(hip)))
+    for key, st in before.items():
+        now = after.get(key, {})
+        diff = [k for k in ("package", "parms", "prims", "points", "packed", "bbox", "prim_attribs",
+                            "detail_attribs", "groups", "guid", "psets", "export_counts")
+                if json.dumps(now.get(k), sort_keys=True, default=str) != json.dumps(st.get(k), sort_keys=True, default=str)]
+        check(not diff, "%s: после перезапуска совпадает всё (расходится: %r)" % (key, diff))
+        check(now.get("export_valid"), "%s: экспорт из открытой сцены валиден" % key)
     return after
 
 

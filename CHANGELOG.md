@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.6.0 — 2026-10-07
+First release with versioned, frozen assets. Nothing in import or export changed since 0.5.1; this release is about
+scenes staying reproducible.
+* **Assets `::6.0`, frozen.** The release code lives in `python3.13libs/hifc_6_0` (`FROZEN = True`) and the
+  `hifc::ifc_import::6.0` / `hifc::ifc_export::6.0` assets are built from it, so a node in a scene always runs the
+  code it was released with. `FROZEN.sha256` records every file and both HDAs; `VERSIONS.json` records the plugin
+  version, the pinned module set, the Houdini and Python versions it was verified with.
+* **`::1.0` stays available** for scenes made before versioning, running its own frozen `hifc_1_0` package.
+* **The release procedure cannot be bypassed:** a sealed version cannot be sealed or frozen again, and development
+  cannot take a number that is frozen or not above everything already taken; `freeze.py --next` raises the plugin
+  version itself, so that step cannot be skipped. `tests/test_freeze.py` covers all of it.
+* **Reference scene.** `tests/hip_compat.py` now builds, for every installed asset version, import nodes in all
+  three output modes (Packed, Polygons, Auto) and exports from each, checks that the bounds agree across modes and
+  across versions, saves the scene, and reopens it in a separate process to compare parameters, geometry, groups,
+  attributes, GUIDs, property sets and export counts. The saved `tests/reference/hifc_6_0_reference.hip` is the
+  baseline for the next release.
+
 ## 0.6.0-dev.3 — 2026-10-07
 Versioned, frozen assets — existing scenes keep the exact code they were built against:
 * **The current code is frozen as `::1.0`.** `freeze.py 1.0` copied the package to `python3.13libs/hifc_1_0`

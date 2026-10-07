@@ -18,6 +18,8 @@ sys.path.insert(0, LIBS)
 
 import hifc  # noqa: E402
 
+PKG_DIR = "hifc"
+
 FAILS = []
 
 
@@ -40,6 +42,14 @@ def const(path, name):
         if line.startswith(name):
             return line.split("=", 1)[1].strip().strip('"')
     return ""
+
+
+def files_of(folder):
+    out = []
+    for base, dirs, files in os.walk(folder):
+        dirs[:] = [d for d in dirs if d != "__pycache__"]
+        out += [os.path.relpath(os.path.join(base, f), folder) for f in files if not f.endswith(".pyc")]
+    return sorted(out)
 
 
 def version_key(v):
@@ -94,11 +104,27 @@ def main():
 
     print("2. Разработка впереди всех замороженных")
     check(hifc.FROZEN is False, "разрабатываемый пакет не заморожен")
-    newer = [v for v in frozen_versions if version_key(v) >= version_key(hifc.HDA_VERSION)]
-    check(not newer, "версия разработки ::%s старше замороженных %r" % (hifc.HDA_VERSION, frozen_versions))
-    dev = [v for v, r in versions.items() if r.get("status") == "development"]
-    check(dev == [hifc.HDA_VERSION], "в VERSIONS.json ровно одна запись разработки и это ::%s (%r)"
-          % (hifc.HDA_VERSION, dev))
+    # состояние сразу после выпуска: разработка ещё стоит на только что замороженном номере,
+    # но её код обязан быть побайтово равен замороженной копии — иначе это уже другой код под тем же номером
+    just_released = hifc.HDA_VERSION in frozen_versions
+    if just_released:
+        name = "hifc_%s" % hifc.HDA_VERSION.replace(".", "_")
+        def normalized(path, pkg):
+            """Текст без двух различий, которые вносит сама заморозка: имя пакета и флаг FROZEN."""
+            t = open(path).read().replace(pkg, "hifc")
+            return re.sub(r"(?m)^FROZEN\s*=.*$", "FROZEN = False", t)
+        diff = [rel for rel in files_of(os.path.join(LIBS, PKG_DIR))
+                if rel.endswith(".py")
+                and normalized(os.path.join(LIBS, PKG_DIR, rel), PKG_DIR)
+                != normalized(os.path.join(LIBS, name, rel), name)]
+        check(not diff, "выпуск ::%s: код разработки совпадает с замороженным (расходится: %r); "
+                        "следующий шаг — freeze.py --next" % (hifc.HDA_VERSION, diff))
+    else:
+        newer = [v for v in frozen_versions if version_key(v) >= version_key(hifc.HDA_VERSION)]
+        check(not newer, "версия разработки ::%s старше замороженных %r" % (hifc.HDA_VERSION, frozen_versions))
+        dev = [v for v, r in versions.items() if r.get("status") == "development"]
+        check(dev == [hifc.HDA_VERSION], "в VERSIONS.json ровно одна запись разработки и это ::%s (%r)"
+              % (hifc.HDA_VERSION, dev))
 
     print("3. Набор библиотек у всех версий согласован")
     for ver, rec in versions.items():

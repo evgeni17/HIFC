@@ -169,6 +169,23 @@ def main():
         check(bool(bad), "%s is reported (%s)" % (name, bad[0][1] if bad else "MISSED"))
 
     mutate("colours swapped between faces", lambda b: b[0].__setitem__("face_style", b[0]["face_style"][::-1].copy()))
+
+    # перестановка цветов между гранями ОДИНАКОВОЙ площади: по сумме площадей неотличима
+    cube = os.path.join(TMP, "neg_cube.ifc")
+    v, fc = box(2.0, 2.0, 2.0)
+    ifc_write.write_ifc([wall(path="/C1", items=[{"verts": v, "faces": fc[:3], "color": (0, 0, 1, 1)},
+                                                 {"verts": v, "faces": fc[3:], "color": (1, 0, 0, 1)}])], cube)
+    cube_recs, _ = ifc_read.read_ifc(cube)
+    swapped = copy.deepcopy(cube_recs)
+    styles = swapped[0]["styles"]
+    check(len(styles) == 2, "cube has two styles (%d)" % len(styles))
+    fs = swapped[0]["face_style"]
+    swapped[0]["face_style"] = np.where(fs == 0, 1, np.where(fs == 1, 0, fs))
+    reg = rt._color_regions(cube_recs[0])
+    areas = sorted(round(x[0], 6) for x in reg.values())
+    bad = rt.compare(cube_recs, swapped, "IFC4")[0]
+    check(len(set(areas)) == 1, "both colours cover the same area (%r m2)" % areas)
+    check(bool(bad), "colours swapped between equal-area faces is reported (%s)" % (bad[0][1] if bad else "MISSED"))
     mutate("duplicated element", lambda b: b.append(copy.deepcopy(b[0])))
     mutate("extra element", lambda b: b.append(dict(copy.deepcopy(b[0]), guid="0extraGUID0extraGUID00")))
     mutate("missing element", lambda b: b.pop())

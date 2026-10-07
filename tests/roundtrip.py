@@ -28,7 +28,7 @@ import ifcopenshell.validate  # noqa: E402
 
 BBOX_TOL = 1e-5      # м
 VALUE_RTOL = 1e-6    # относительная точность чисел в свойствах
-AREA_RTOL = 1e-3     # относительная точность площадей при сравнении раскладки цветов
+AREA_RTOL = 1e-3     # относительная точность площадей в сравнении раскладки цветов
 
 
 def to_elements(recs):
@@ -99,37 +99,53 @@ def _tri_areas(v, faces):
     return 0.5 * np.linalg.norm(np.cross(p1 - p0, p2 - p0), axis=1)
 
 
-def _color_areas(r):
-    """Площадь граней по цветам. В отличие от палитры ловит перестановку цветов между гранями."""
+def _color_regions(r):
+    """{цвет: (площадь, центр масс площади, габариты)} по уникальным граням.
+
+    Сумма площадей не ловит перестановку цветов между гранями одинаковой площади, а полное сравнение
+    самих граней ломается от разной триангуляции. Центр масс площади от триангуляции не зависит:
+    разрежь ту же поверхность иначе — он останется прежним, а перестановка цветов его сдвинет.
+    """
     v = ifc_read.world_verts(r)
     faces = r["faces"]
     if not len(faces) or not len(v):
         return {}
     areas = _tri_areas(v, faces)
+    cents = v[faces].mean(axis=1)
     fs = r["face_style"]
-    rv = np.round(v, 6)
-    seen, out = set(), {}
+    rv = np.round(v, 5)
+    acc = {}
+    seen = set()
     for i, t in enumerate(faces.tolist()):
         key = tuple(sorted(tuple(rv[j]) for j in t))
         if key in seen:
-            continue       # повторяющиеся грани (двусторонние поверхности) считаем один раз
+            continue     # повторяющиеся грани (двусторонние поверхности) считаем один раз
         seen.add(key)
         sid = int(fs[i])
         col = r["styles"][sid][1] if 0 <= sid < len(r["styles"]) else None
         ck = tuple(round(float(x), 3) for x in col) if col is not None else None
-        out[ck] = out.get(ck, 0.0) + float(areas[i])
-    return out
+        a, c = float(areas[i]), cents[i]
+        area, mom, lo, hi = acc.get(ck, (0.0, np.zeros(3), v[faces[i]].min(0), v[faces[i]].max(0)))
+        acc[ck] = (area + a, mom + a * c, np.minimum(lo, v[faces[i]].min(0)), np.maximum(hi, v[faces[i]].max(0)))
+    return {ck: (area, mom / max(area, 1e-12), np.concatenate([lo, hi])) for ck, (area, mom, lo, hi) in acc.items()}
 
 
 def _colors_diff(a, b):
-    ca, cb = _color_areas(a), _color_areas(b)
-    total = sum(ca.values()) or 1.0
-    tol = AREA_RTOL * total
-    if set(ca) != set(cb):
-        return "colors: %r -> %r" % (sorted(ca), sorted(cb))
-    for k, v in ca.items():
-        if abs(v - cb[k]) > tol:
-            return "colour %r covers %.4g m2 instead of %.4g m2" % (k, cb[k], v)
+    ra, rb = _color_regions(a), _color_regions(b)
+    if sorted(ra, key=repr) != sorted(rb, key=repr):
+        return "colours: %r -> %r" % (sorted(ra, key=repr), sorted(rb, key=repr))
+    total = sum(x[0] for x in ra.values()) or 1.0
+    for ck, (area, cent, bb) in ra.items():
+        area2, cent2, bb2 = rb[ck]
+        if abs(area - area2) > AREA_RTOL * total:
+            return "colour %r covers %.4g m2 instead of %.4g m2" % (ck, area2, area)
+        tol = max(BBOX_TOL, 1e-4 * np.sqrt(max(area, 1e-9)))
+        if np.max(np.abs(cent - cent2)) > tol:
+            return "colour %r sits elsewhere: centre %s instead of %s" % (
+                ck, np.round(cent2, 4).tolist(), np.round(cent, 4).tolist())
+        if np.max(np.abs(bb - bb2)) > tol:
+            return "colour %r covers a different area: bbox %s instead of %s" % (
+                ck, np.round(bb2, 4).tolist(), np.round(bb, 4).tolist())
     return None
 
 

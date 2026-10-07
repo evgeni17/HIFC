@@ -3,7 +3,7 @@
   "assets": {
     "1.0": {
       "status": "development",
-      "plugin": "0.6.0.dev1",
+      "plugin": "0.6.0.dev2",
       "package": "hifc",
       "vendor": {
         "ifcopenshell": "0.8.5",

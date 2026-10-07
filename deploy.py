@@ -26,7 +26,8 @@ INSTALL_JSON = "INSTALL.json"
 
 SKIP_DIRS = {".git", "__pycache__", "backup", ".idea", ".vscode", "vendor"}
 # test_repo.py проверяет сам репозиторий (vendor/README.md, VERSIONS.json) — в установке ему нечего делать
-SKIP_REL = {"deploy.py", ".gitignore", ".gitattributes", ".DS_Store", os.path.join("tests", "test_repo.py"),
+SKIP_REL = {"deploy.py", ".gitignore", ".gitattributes", ".DS_Store",
+            os.path.join("tests", "test_repo.py"), os.path.join("tests", "test_deploy.py"),
             os.path.join("tests", "private"), os.path.join("tests", "out"),
             os.path.join("tests", "datasets"), os.path.join("tests", "big")}
 SKIP_SUFFIX = (".pyc", ".hip", ".hiplc", ".hipnc")
@@ -101,29 +102,37 @@ def main():
         old = json.load(open(os.path.join(target, INSTALL_JSON)))
     except Exception:
         pass
-    stale = [r for r in old.get("files", []) if r not in files]
-    failed = []
+    # всё, что ставил прежний запуск (и то, что он не смог удалить), минус то, что есть в разработке сейчас
+    known = list(dict.fromkeys(list(old.get("files", [])) + list(old.get("pending_removal", []))))
+    stale = [r for r in known if r not in files]
+    failed, pending = [], []
     for rel in stale:
         p = os.path.join(target, rel)
+        if not os.path.exists(p):
+            continue                      # уже удалён руками — забываем
         print("  %s %s" % ("remove" if args.clean else "stale ", rel))
-        if args.clean and not args.dry_run and os.path.isfile(p):
-            try:
-                os.remove(p)
-            except OSError as ex:
-                failed.append("%s (%s)" % (rel, ex.strerror or ex))
+        if not (args.clean and not args.dry_run):
+            pending.append(rel)           # помним до следующего запуска с --clean
+            continue
+        try:
+            os.remove(p)
+        except OSError as ex:
+            failed.append("%s (%s)" % (rel, ex.strerror or ex))
+            pending.append(rel)           # не удалилось — остаётся в списке, иначе забудется навсегда
 
     info = dict(plugin_info(HERE), name="HIFC", commit=git_commit(HERE),
                 date=datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
-                source=HERE, files=files)
+                source=HERE, files=files, pending_removal=sorted(pending))
     if not args.dry_run:
         os.makedirs(target, exist_ok=True)
         with open(os.path.join(target, INSTALL_JSON), "w") as fh:
             json.dump(info, fh, indent=1, ensure_ascii=False)
             fh.write("\n")
-    print("deploy %s -> %s: copied %d, unchanged %d, stale %d%s%s"
+    print("deploy %s -> %s: copied %d, unchanged %d, stale %d%s%s%s"
           % (info.get("__version__", "?"), target, copied, unchanged, len(stale),
              " (dry run)" if args.dry_run else ("" if not args.clean else ", removed"),
-             ("; could not remove: " + ", ".join(failed)) if failed else ""))
+             ("; could not remove: " + ", ".join(failed)) if failed else "",
+             ("; kept in INSTALL.json for the next --clean: %d" % len(pending)) if pending and not args.dry_run else ""))
     return 1 if failed else 0
 
 

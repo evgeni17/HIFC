@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.0-dev.2 — 2026-10-07
+Two gaps found in review, both with tests that fail without the fix:
+* `deploy.py` no longer forgets a stale file it could not delete: unremoved files stay in `INSTALL.json` as
+  `pending_removal` until a later `--clean` actually removes them. New `tests/test_deploy.py` covers install,
+  re-install, stale bookkeeping across runs, foreign files and `--dry-run`.
+* The round-trip colour check compares, per colour, the area **and the area-weighted centre and bounds** of the faces
+  it covers, instead of the area alone: swapping colours between faces of equal area used to pass. The measure does
+  not depend on how the surface is triangulated, so re-tessellation on export still compares clean (35/35 in both
+  `auto`/mm and `IFC2X3`/cm). `tests/test_core.py` has the equal-area swap as a negative test.
+
 ## 0.6.0-dev.1 — 2026-10-07
 Repository and installation hygiene (no change to import/export behaviour):
 * **Pinned dependency versions.** `VENDOR` in `python3.13libs/hifc/__init__.py` is now the single place that says

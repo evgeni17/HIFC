@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.7.0-dev.1 — 2026-10-07
+* Development moved to assets `::7.0` (`freeze.py --next 7.0`, which also raised the plugin version). `::6.0` and
+  `::1.0` stay frozen and keep serving the scenes that use them. No behaviour changes yet.
+* Checked with all three asset versions installed at once: core, the Houdini regression, a scene holding nodes of
+  every version in every output mode, and the `0.6.0` reference scene reopened after the update — unchanged.
+
 ## 0.6.0 — 2026-10-07
 First release with versioned, frozen assets. Nothing in import or export changed since 0.5.1; this release is about
 scenes staying reproducible.

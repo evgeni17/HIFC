@@ -9,10 +9,10 @@ import os
 import platform
 import sys
 
-__version__ = "0.6.0"
+__version__ = "0.7.0.dev1"
 
 # версия ассетов: сейчас hifc::*::1.0 (переход на правило «релиз 0.N -> ассеты ::N.0» — отдельным заходом)
-HDA_VERSION = "6.0"
+HDA_VERSION = "7.0"
 FROZEN = False
 IMPORT_TYPE = "hifc::ifc_import::" + HDA_VERSION
 EXPORT_TYPE = "hifc::ifc_export::" + HDA_VERSION

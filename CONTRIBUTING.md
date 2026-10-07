@@ -8,6 +8,8 @@ Keep third-party libraries out of the repository (`vendor/` is git-ignored).
 
 ## Development layout
 
+The current development plan (stages, decisions, what is next) lives in `docs/PLAN.ru.md`, in Russian.
+
 The repository is never loaded by Houdini. The Houdini package (`HIFC.json` in the packages folder) points at the
 **installed** copy, by default `~/tools_houdini/HIFC`. Edit the repository, then install:
 
